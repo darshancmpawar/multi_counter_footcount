@@ -345,8 +345,8 @@ st.title("Lunch counter demand forecast")
 if MVP_MODE:
     st.caption("MVP — menu plan in, numbers out: per-counter demand, calibrated "
                "range, suggested order and risk, one day ahead of service.")
-    tab_fc, tab_perf = st.tabs(["🔮  Forecast", "📈  Evaluation metrics"])
-    tab_hist = tab_about = None
+    tab_fc = st.container()  # no tab bar — forecast only
+    tab_hist = tab_perf = tab_about = None
 else:
     st.caption("Plan tomorrow's menu → get per-counter demand, a calibrated range, "
                "a suggested order quantity and the risk level — one day ahead of service.")
@@ -730,69 +730,71 @@ if not MVP_MODE:
                              use_container_width=True, hide_index=True)
 
 # ═══════════════════════════════════════════════════ MODEL PERFORMANCE ═══════
-with tab_perf:
-    st.subheader("How good is it? (scored once, on locked data)")
+# Evaluation metrics — hidden in MVP mode
+if not MVP_MODE:
+    with tab_perf:
+        st.subheader("How good is it? (scored once, on locked data)")
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("June test — counter WAPE", "6.06%", "target ±6–8% met",
-              help="Weighted absolute % error at Date+Counter grain, June 2026 internal test (30 counter-days).")
-    k2.metric("June test — day WAPE", "3.54%",
-              help="Sum of counter predictions vs actual daily total.")
-    k3.metric("Current practice (proxy)", "26.4%", "-20.3 pts vs model",
-              delta_color="inverse",
-              help="7-day moving average — the incumbent ordering method — on the same June window.")
-    k4.metric("P10–P90 coverage", "87%", "target 80%",
-              help="Share of June counter-days whose actual fell inside the calibrated range.")
-    st.write("")
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("June test — counter WAPE", "6.06%", "target ±6–8% met",
+                  help="Weighted absolute % error at Date+Counter grain, June 2026 internal test (30 counter-days).")
+        k2.metric("June test — day WAPE", "3.54%",
+                  help="Sum of counter predictions vs actual daily total.")
+        k3.metric("Current practice (proxy)", "26.4%", "-20.3 pts vs model",
+                  delta_color="inverse",
+                  help="7-day moving average — the incumbent ordering method — on the same June window.")
+        k4.metric("P10–P90 coverage", "87%", "target 80%",
+                  help="Share of June counter-days whose actual fell inside the calibrated range.")
+        st.write("")
 
-    st.markdown("**Every split, every metric** — the June column was scored exactly once:")
-    perf = pd.DataFrame({
-        "Split": ["Train (Aug–Mar)", "Validation (Apr–May)", "June test (locked)"],
-        "MAE": [33.3, 52.1, 37.3], "RMSE": [42.0, 65.2, 46.3],
-        "MAPE %": [7.4, 10.2, 6.1], "WAPE %": [6.28, 9.10, 6.06],
-        "Bias": [-0.1, 6.0, -4.8], "Over %": [47, 53, 50], "Under %": [53, 48, 50],
-    })
-    st.dataframe(perf, use_container_width=True, hide_index=True)
-    st.caption("June is only 30 counter-days — treat 6.06% as an encouraging point "
-               "estimate. Validation's 9.10% over 120 rows is the conservative "
-               "expectation for live months.")
+        st.markdown("**Every split, every metric** — the June column was scored exactly once:")
+        perf = pd.DataFrame({
+            "Split": ["Train (Aug–Mar)", "Validation (Apr–May)", "June test (locked)"],
+            "MAE": [33.3, 52.1, 37.3], "RMSE": [42.0, 65.2, 46.3],
+            "MAPE %": [7.4, 10.2, 6.1], "WAPE %": [6.28, 9.10, 6.06],
+            "Bias": [-0.1, 6.0, -4.8], "Over %": [47, 53, 50], "Under %": [53, 48, 50],
+        })
+        st.dataframe(perf, use_container_width=True, hide_index=True)
+        st.caption("June is only 30 counter-days — treat 6.06% as an encouraging point "
+                   "estimate. Validation's 9.10% over 120 rows is the conservative "
+                   "expectation for live months.")
 
-    st.markdown("**Baselines on the same June window**")
-    base = pd.DataFrame({
-        "Method": ["Final LightGBM model", "Same-weekday rolling-4 baseline",
-                   "7-day moving average (business practice)"],
-        "Counter WAPE %": [6.06, 7.70, 26.4],
-    })
-    if MVP_MODE:
-        st.dataframe(base, use_container_width=True, hide_index=True)
-        st.stop()  # MVP: numbers only — chart + diagnostic figures disabled below
-    figb = go.Figure(go.Bar(
-        y=base["Method"][::-1], x=base["Counter WAPE %"][::-1], orientation="h",
-        width=0.45,
-        marker_color=["#c9c7c0", "#c9c7c0", "#155493"],
-        text=[f"{v}%" for v in base["Counter WAPE %"][::-1]], textposition="outside",
-        textfont=dict(color=INK, size=13),
-        hovertemplate="<b>%{y}</b><br>WAPE %{x}%<extra></extra>",
-    ))
-    base_layout(figb, height=240, showlegend=False,
-                title=dict(text="Counter-level WAPE, June 2026 (lower is better)",
-                           font=dict(size=14, color=INK)))
-    figb.update_xaxes(title_text="WAPE %", range=[0, 31])
-    st.plotly_chart(figb, use_container_width=True, config=PLOTLY_CFG)
+        st.markdown("**Baselines on the same June window**")
+        base = pd.DataFrame({
+            "Method": ["Final LightGBM model", "Same-weekday rolling-4 baseline",
+                       "7-day moving average (business practice)"],
+            "Counter WAPE %": [6.06, 7.70, 26.4],
+        })
+        if MVP_MODE:
+            st.dataframe(base, use_container_width=True, hide_index=True)
+            st.stop()  # MVP: numbers only — chart + diagnostic figures disabled below
+        figb = go.Figure(go.Bar(
+            y=base["Method"][::-1], x=base["Counter WAPE %"][::-1], orientation="h",
+            width=0.45,
+            marker_color=["#c9c7c0", "#c9c7c0", "#155493"],
+            text=[f"{v}%" for v in base["Counter WAPE %"][::-1]], textposition="outside",
+            textfont=dict(color=INK, size=13),
+            hovertemplate="<b>%{y}</b><br>WAPE %{x}%<extra></extra>",
+        ))
+        base_layout(figb, height=240, showlegend=False,
+                    title=dict(text="Counter-level WAPE, June 2026 (lower is better)",
+                               font=dict(size=14, color=INK)))
+        figb.update_xaxes(title_text="WAPE %", range=[0, 31])
+        st.plotly_chart(figb, use_container_width=True, config=PLOTLY_CFG)
 
-    cimg1, cimg2 = st.columns(2)
-    with cimg1:
-        st.image(str(BUNDLE / "figs" / "final_pred_vs_actual.png"),
-                 caption="June test — predicted vs actual, per counter-day",
-                 use_container_width=True)
-    with cimg2:
-        st.image(str(BUNDLE / "figs" / "learning_curve.png"),
-                 caption="Learning curve — still in the 'more data helps' regime; retrain monthly",
-                 use_container_width=True)
+        cimg1, cimg2 = st.columns(2)
+        with cimg1:
+            st.image(str(BUNDLE / "figs" / "final_pred_vs_actual.png"),
+                     caption="June test — predicted vs actual, per counter-day",
+                     use_container_width=True)
+        with cimg2:
+            st.image(str(BUNDLE / "figs" / "learning_curve.png"),
+                     caption="Learning curve — still in the 'more data helps' regime; retrain monthly",
+                     use_container_width=True)
 
-    with st.expander("🖼️ EDA figures"):
-        st.image(str(BUNDLE / "figs" / "eda_main.png"), use_container_width=True)
-        st.image(str(BUNDLE / "figs" / "eda_structure.png"), use_container_width=True)
+        with st.expander("🖼️ EDA figures"):
+            st.image(str(BUNDLE / "figs" / "eda_main.png"), use_container_width=True)
+            st.image(str(BUNDLE / "figs" / "eda_structure.png"), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════ ABOUT ═══════
 # About page — disabled in MVP mode
