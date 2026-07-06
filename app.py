@@ -36,19 +36,25 @@ COUNTERS = ["North Non Veg", "North Veg", "South Non Veg", "South Veg"]
 WEEKDAY_LEVELS = ["Friday", "Monday", "Thursday", "Tuesday", "Wednesday"]
 DAY_TYPES = ["Regular", "Previous Day of Holiday", "Next Day of Holiday"]
 
-# Fixed entity → color mapping (validated categorical palette; never re-ordered)
+# SmartQ brand (Brand Guideline 09/2022): yellow FCC529, blue 155493,
+# cyan 3F99A8, orange ED6940, dark gray 333333, Poppins typography.
+BRAND_YELLOW, BRAND_DARK = "#FCC529", "#333333"
+
+# Fixed entity → color mapping for chart marks. Brand hues, snapped to the
+# nearest steps that pass the categorical-palette checks (raw FCC529/3F99A8
+# are too light/gray for data marks); never re-ordered.
 COUNTER_COLORS = {
-    "North Non Veg": "#2a78d6",
-    "North Veg": "#1baf7a",
-    "South Non Veg": "#eda100",
-    "South Veg": "#008300",
+    "North Non Veg": "#155493",   # brand blue
+    "North Veg": "#0E93AE",       # brand cyan, chroma-corrected
+    "South Non Veg": "#E0A80A",   # brand yellow, deepened for marks
+    "South Veg": "#ED6940",       # brand orange
 }
 RISK_STYLE = {
-    "LOW": ("✓ LOW", "#0ca30c", "#e7f6e7"),
-    "MEDIUM": ("⚠ MEDIUM", "#8a5a00", "#fdf1d7"),
-    "HIGH": ("▲ HIGH", "#d03b3b", "#fbe7e7"),
+    "LOW": ("✓ LOW", "#1a7d1a", "#e9f3e7"),
+    "MEDIUM": ("⚠ MEDIUM", "#8a5a00", "#fdf3d9"),
+    "HIGH": ("▲ HIGH", "#c03333", "#fbe9e7"),
 }
-INK, INK2, MUTED, GRID = "#0b0b0b", "#52514e", "#898781", "#e1e0d9"
+INK, INK2, MUTED, GRID = "#333333", "#5f5d58", "#8a8884", "#e8e6e0"
 
 st.set_page_config(
     page_title="Lunch Counter Forecast",
@@ -57,49 +63,94 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------- styling ----
+# ------------------------------------------------- styling (SmartQ brand) ----
 st.markdown("""
 <style>
-  .block-container {padding-top: 2.2rem; max-width: 1200px;}
-  h1, h2, h3 {letter-spacing: -0.01em;}
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+
+  html, body, [class*="st-"], [data-testid="stAppViewContainer"] * {
+    font-family: 'Poppins', system-ui, -apple-system, sans-serif;
+  }
+  /* keep Streamlit's material icon glyphs on their icon font */
+  span[data-testid="stIconMaterial"], [data-testid="stExpanderToggleIcon"],
+  [data-testid="stFileUploaderDropzone"] span[translate="no"] {
+    font-family: 'Material Symbols Rounded' !important;
+  }
+  .block-container {padding-top: 3.4rem; max-width: 1200px;}
+
+  /* multiselect chips — dark ink pills (white-on-yellow fails contrast) */
+  [data-baseweb="tag"] {background:#333333 !important; border-radius:999px !important;}
+  [data-baseweb="tag"] span, [data-baseweb="tag"] svg {color:#ffffff !important; fill:#ffffff !important;}
+  h1, h2, h3 {font-family:'Poppins',sans-serif; font-weight:700; color:#333333;
+              letter-spacing:-0.01em;}
+
+  /* brand top strip, like the guideline running head */
+  .sq-topline {display:flex; align-items:center; gap:.9rem; margin-bottom:.4rem;}
+  .sq-topline .sq-label {font-size:.72rem; font-weight:700; letter-spacing:.14em;
+                         color:#333333; white-space:nowrap;}
+  .sq-topline .sq-rule {flex:1; height:2px; background:#333333; opacity:.85;}
 
   @keyframes rise {from {opacity:0; transform:translateY(6px);} to {opacity:1; transform:none;}}
   .fc-card {
-    background: #fcfcfb; border: 1px solid rgba(11,11,11,0.10); border-radius: 14px;
-    padding: 1rem 1.15rem; height: 100%;
-    box-shadow: 0 1px 2px rgba(11,11,11,0.04);
+    background:#ffffff; border:1px solid rgba(51,51,51,0.08); border-radius:18px;
+    padding: 1rem 1.15rem; height:100%;
+    box-shadow: 0 1px 3px rgba(51,51,51,0.06);
     transition: box-shadow .18s ease, transform .18s ease;
     animation: rise .28s ease both;
   }
-  .fc-card:hover {box-shadow: 0 6px 18px rgba(11,11,11,0.09); transform: translateY(-2px);}
-  .fc-kicker {font-size: .74rem; font-weight: 600; letter-spacing:.06em; text-transform: uppercase;
-              color:#52514e; display:flex; align-items:center; gap:.45rem;}
+  .fc-card:hover {box-shadow: 0 8px 22px rgba(51,51,51,0.10); transform: translateY(-2px);}
+  .fc-kicker {font-size:.72rem; font-weight:700; letter-spacing:.09em; text-transform:uppercase;
+              color:#5f5d58; display:flex; align-items:center; gap:.45rem;}
   .fc-dot {width:.62rem; height:.62rem; border-radius:50%; display:inline-block; flex:none;}
-  .fc-value {font-size: 2.05rem; font-weight: 700; color:#0b0b0b; line-height:1.15; margin:.15rem 0 .1rem;}
-  .fc-sub {font-size:.82rem; color:#898781;}
-  .fc-row {display:flex; justify-content:space-between; font-size:.86rem; color:#52514e;
-           padding:.28rem 0; border-top:1px dashed #e1e0d9;}
-  .fc-row b {color:#0b0b0b; font-variant-numeric: tabular-nums;}
+  .fc-value {font-size:2.05rem; font-weight:800; color:#333333; line-height:1.15; margin:.15rem 0 .1rem;}
+  .fc-sub {font-size:.82rem; color:#8a8884;}
+  .fc-row {display:flex; justify-content:space-between; font-size:.86rem; color:#5f5d58;
+           padding:.28rem 0; border-top:1px dashed #e8e6e0;}
+  .fc-row b {color:#333333; font-variant-numeric: tabular-nums;}
   .fc-badge {display:inline-block; font-size:.72rem; font-weight:700; letter-spacing:.04em;
              padding:.18rem .55rem; border-radius:999px;}
-  .fc-why {font-size:.8rem; color:#52514e; margin-top:.55rem; line-height:1.45;
-           border-left: 3px solid #e1e0d9; padding-left:.6rem;}
+  .fc-why {font-size:.8rem; color:#5f5d58; margin-top:.55rem; line-height:1.45;
+           border-left:3px solid #FCC529; padding-left:.6rem;}
 
-  .fc-hero {background: linear-gradient(135deg, #eef4fc 0%, #fcfcfb 60%); border:1px solid rgba(42,120,214,.25);
-            border-radius: 16px; padding: 1.1rem 1.4rem; animation: rise .28s ease both;}
-  .fc-hero .fc-value {font-size: 2.6rem;}
+  /* hero — brand yellow block, dark ink (guideline cover style) */
+  .fc-hero {background:#FCC529; border:none; border-radius:20px;
+            padding:1.2rem 1.5rem; animation: rise .28s ease both;
+            box-shadow: 0 2px 10px rgba(252,197,41,0.35);}
+  .fc-hero .fc-kicker {color:#333333; opacity:.75;}
+  .fc-hero .fc-value {font-size:2.7rem; color:#333333;}
+  .fc-hero .fc-sub {color:#333333; opacity:.7; font-weight:500;}
 
   div[data-testid="stMetric"] {
-    background:#fcfcfb; border:1px solid rgba(11,11,11,0.10); border-radius:12px;
-    padding: .8rem 1rem; box-shadow: 0 1px 2px rgba(11,11,11,0.04);
+    background:#ffffff; border:1px solid rgba(51,51,51,0.08); border-radius:16px;
+    padding:.8rem 1rem; box-shadow: 0 1px 3px rgba(51,51,51,0.06);
   }
-  div[data-testid="stMetricLabel"] {color:#52514e;}
+  div[data-testid="stMetricLabel"] {color:#5f5d58;}
 
-  .stTabs [data-baseweb="tab-list"] {gap: .35rem;}
-  .stTabs [data-baseweb="tab"] {border-radius: 10px 10px 0 0; padding: .55rem 1.05rem;}
+  .stTabs [data-baseweb="tab-list"] {gap:.35rem; border-bottom:2px solid #e8e6e0;}
+  .stTabs [data-baseweb="tab"] {border-radius:12px 12px 0 0; padding:.55rem 1.1rem; font-weight:600;}
+  .stTabs [aria-selected="true"] {background: rgba(252,197,41,0.18);}
 
-  div.stButton > button[kind="primary"], div.stDownloadButton > button {border-radius: 10px;}
-  section[data-testid="stSidebar"] {border-right: 1px solid #e1e0d9;}
+  /* buttons — yellow pill with dark ink, per logo lockup */
+  div.stButton > button[kind="primary"] {
+    background:#FCC529; color:#333333; font-weight:700; border:none;
+    border-radius:999px; padding:.6rem 1.2rem;
+    transition: filter .15s ease, transform .15s ease;
+  }
+  div.stButton > button[kind="primary"]:hover {filter:brightness(.95); transform:translateY(-1px);
+    color:#333333; background:#FCC529;}
+  div.stButton > button, div.stDownloadButton > button {border-radius:999px; font-weight:600;}
+
+  /* sidebar — brand yellow panel */
+  section[data-testid="stSidebar"] {background:#FCC529; border-right:none;}
+  section[data-testid="stSidebar"] * {color:#333333;}
+  section[data-testid="stSidebar"] hr {border-color: rgba(51,51,51,0.25);}
+  .sq-logo {font-size:1.5rem; font-weight:800; letter-spacing:.06em; color:#333333;}
+  .sq-logo .q {color:#ffffff;}
+  .sq-compass {font-size:.6rem; font-weight:700; letter-spacing:.18em; color:#333333;
+               opacity:.8; margin-top:-.2rem;}
+  .sq-appname {font-size:1.05rem; font-weight:700; color:#333333; margin-top:1.1rem;}
+  .sq-note {background: rgba(255,255,255,0.55); border-radius:14px; padding:.7rem .85rem;
+            font-size:.8rem; color:#333333; line-height:1.5;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -220,20 +271,20 @@ def run_forecast(hist: pd.DataFrame, plan: pd.DataFrame) -> pd.DataFrame:
 def base_layout(fig: go.Figure, height=380, **kw):
     fig.update_layout(
         height=height,
-        paper_bgcolor="#fcfcfb", plot_bgcolor="#fcfcfb",
-        font=dict(family='system-ui, -apple-system, "Segoe UI", sans-serif',
+        paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+        font=dict(family='Poppins, system-ui, -apple-system, sans-serif',
                   color=INK2, size=13),
         margin=dict(l=10, r=30, t=64, b=10),
-        hoverlabel=dict(bgcolor="#0b0b0b", font_color="#ffffff",
-                        font_size=12, bordercolor="#0b0b0b"),
+        hoverlabel=dict(bgcolor="#333333", font_color="#ffffff",
+                        font_size=12, bordercolor="#333333"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02,
                     x=1, xanchor="right", font=dict(size=12, color=INK2)),
         title_x=0, title_xanchor="left",
         **kw,
     )
-    fig.update_xaxes(gridcolor=GRID, linecolor="#c3c2b7", zeroline=False,
+    fig.update_xaxes(gridcolor=GRID, linecolor="#c9c7c0", zeroline=False,
                      tickfont=dict(color=MUTED))
-    fig.update_yaxes(gridcolor=GRID, linecolor="#c3c2b7", zeroline=False,
+    fig.update_yaxes(gridcolor=GRID, linecolor="#c9c7c0", zeroline=False,
                      tickfont=dict(color=MUTED))
     return fig
 
@@ -243,7 +294,11 @@ PLOTLY_CFG = {"displayModeBar": False}
 
 # --------------------------------------------------------------- sidebar -----
 with st.sidebar:
-    st.markdown("## 🍽️ Lunch Counter\n### Demand Forecast")
+    st.markdown(
+        '<div class="sq-logo">SMART<span class="q">Q</span></div>'
+        '<div class="sq-compass">A COMPASS GROUP COMPANY</div>'
+        '<div class="sq-appname">Lunch Counter Demand Forecast</div>',
+        unsafe_allow_html=True)
     st.caption("LightGBM · Poisson objective · frozen bundle, "
                "conformalized P10–P90 intervals.")
     st.divider()
@@ -262,8 +317,11 @@ with st.sidebar:
         hist = load_history(None)
 
     last_day = hist["Date"].max()
-    st.success(f"History loaded: **{hist['Date'].min():%d %b %Y} → {last_day:%d %b %Y}**  \n"
-               f"{hist.shape[0]:,} item rows · {hist['Date'].nunique()} working days")
+    st.markdown(
+        f'<div class="sq-note">History loaded ✓<br>'
+        f'<b>{hist["Date"].min():%d %b %Y} → {last_day:%d %b %Y}</b><br>'
+        f'{hist.shape[0]:,} item rows · {hist["Date"].nunique()} working days</div>',
+        unsafe_allow_html=True)
     if not MVP_MODE:  # sidebar model-stats blurb — disabled in the MVP
         st.divider()
         st.markdown(
@@ -278,6 +336,10 @@ cd_hist = counter_day_history(hist)
 items_by_counter, item_to_cat, last_menus = item_catalog(hist)
 
 # ---------------------------------------------------------------- header -----
+st.markdown(
+    '<div class="sq-topline"><span class="sq-label">SMARTQ · DEMAND FORECAST</span>'
+    '<span class="sq-rule"></span></div>',
+    unsafe_allow_html=True)
 st.title("Lunch counter demand forecast")
 if MVP_MODE:
     st.caption("MVP — menu plan in, numbers out: per-counter demand, calibrated "
@@ -513,7 +575,7 @@ with tab_fc:
                     textposition="inside", insidetextanchor="middle",
                     textfont=dict(
                         size=12,
-                        color=["#0b0b0b" if COUNTER_COLORS[c] in ("#eda100", "#1baf7a")
+                        color=["#333333" if COUNTER_COLORS[c] in ("#E0A80A", "#0E93AE")
                                else "#ffffff" for c in gg["Counter Name"]]),
                     error_x=dict(type="data", array=gg["hi"] - gg["pred"],
                                  arrayminus=gg["pred"] - gg["lo"],
@@ -678,7 +740,7 @@ with tab_perf:
     figb = go.Figure(go.Bar(
         y=base["Method"][::-1], x=base["Counter WAPE %"][::-1], orientation="h",
         width=0.45,
-        marker_color=["#c3c2b7", "#c3c2b7", "#2a78d6"],
+        marker_color=["#c9c7c0", "#c9c7c0", "#155493"],
         text=[f"{v}%" for v in base["Counter WAPE %"][::-1]], textposition="outside",
         textfont=dict(color=INK, size=13),
         hovertemplate="<b>%{y}</b><br>WAPE %{x}%<extra></extra>",
