@@ -15,7 +15,13 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app opens on `http://localhost:8501` with four tabs:
+> **MVP mode** — the app currently runs lean: menu plan in → numbers out
+> (prediction, P10–P90 range, suggested order, risk) plus the evaluation
+> metrics on trained data. Explanations, result cards, charts, the history
+> explorer and the about page are disabled for now; set `MVP_MODE = False`
+> at the top of `app.py` to restore the full tool.
+
+In full mode the app opens on `http://localhost:8501` with four tabs:
 
 | Tab | What it does |
 |---|---|

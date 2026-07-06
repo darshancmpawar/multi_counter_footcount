@@ -23,6 +23,14 @@ sys.path.insert(0, str(BUNDLE))
 
 from features import build_all, CAT_FEATURES, NUM_FEATURES, PAN_FLAGS  # noqa: E402
 
+# ---------------------------------------------------------------------------
+# MVP_MODE = True  →  lean MVP: plan in, numbers out (prediction, range,
+# suggested order, risk) + evaluation metrics on trained data. Explanations,
+# result cards, charts, history explorer and the about page are disabled
+# ("commented out") for now. Flip to False to restore the full tool.
+# ---------------------------------------------------------------------------
+MVP_MODE = True
+
 DEFAULT_HISTORY = ROOT / "Lunch_Master_Data_FINAL(cleaned).xlsx"
 COUNTERS = ["North Non Veg", "North Veg", "South Non Veg", "South Veg"]
 WEEKDAY_LEVELS = ["Friday", "Monday", "Thursday", "Tuesday", "Wednesday"]
@@ -204,7 +212,8 @@ def run_forecast(hist: pd.DataFrame, plan: pd.DataFrame) -> pd.DataFrame:
     target["order"] = (np.clip(models["q75"].predict(X), 0, None) + cfg["order_corr"]).round(-1)
     width = (target["hi"] - target["lo"]) / target["pred"].clip(lower=1)
     target["risk"] = np.select([width > 0.45, width > 0.30], ["HIGH", "MEDIUM"], "LOW")
-    target["why"] = target.apply(explain, axis=1)
+    if not MVP_MODE:  # plain-language explanations — disabled in the MVP
+        target["why"] = target.apply(explain, axis=1)
     return target.sort_values(["Date", "pred"], ascending=[True, False])
 
 
@@ -255,26 +264,32 @@ with st.sidebar:
     last_day = hist["Date"].max()
     st.success(f"History loaded: **{hist['Date'].min():%d %b %Y} → {last_day:%d %b %Y}**  \n"
                f"{hist.shape[0]:,} item rows · {hist['Date'].nunique()} working days")
-    st.divider()
-    st.markdown(
-        "**Locked June test**  \n"
-        "Counter WAPE **6.06%** · Day WAPE **3.54%**  \n"
-        "vs moving-average practice **26.4%**"
-    )
-    st.caption("Predictions use only information available at vendor-ordering "
-               "time (the evening before service).")
+    if not MVP_MODE:  # sidebar model-stats blurb — disabled in the MVP
+        st.divider()
+        st.markdown(
+            "**Locked June test**  \n"
+            "Counter WAPE **6.06%** · Day WAPE **3.54%**  \n"
+            "vs moving-average practice **26.4%**"
+        )
+        st.caption("Predictions use only information available at vendor-ordering "
+                   "time (the evening before service).")
 
 cd_hist = counter_day_history(hist)
 items_by_counter, item_to_cat, last_menus = item_catalog(hist)
 
 # ---------------------------------------------------------------- header -----
 st.title("Lunch counter demand forecast")
-st.caption("Plan tomorrow's menu → get per-counter demand, a calibrated range, "
-           "a suggested order quantity and the risk level — one day ahead of service.")
-
-tab_fc, tab_hist, tab_perf, tab_about = st.tabs(
-    ["🔮  Forecast", "📊  History explorer", "📈  Model performance", "ℹ️  About the model"]
-)
+if MVP_MODE:
+    st.caption("MVP — menu plan in, numbers out: per-counter demand, calibrated "
+               "range, suggested order and risk, one day ahead of service.")
+    tab_fc, tab_perf = st.tabs(["🔮  Forecast", "📈  Evaluation metrics"])
+    tab_hist = tab_about = None
+else:
+    st.caption("Plan tomorrow's menu → get per-counter demand, a calibrated range, "
+               "a suggested order quantity and the risk level — one day ahead of service.")
+    tab_fc, tab_hist, tab_perf, tab_about = st.tabs(
+        ["🔮  Forecast", "📊  History explorer", "📈  Model performance", "ℹ️  About the model"]
+    )
 
 # ══════════════════════════════════════════════════════════════ FORECAST ═════
 with tab_fc:
@@ -421,6 +436,33 @@ with tab_fc:
                 '<div class="fc-sub">Build or upload a menu plan on the left, '
                 'then hit <b>Run forecast</b>.</div></div>',
                 unsafe_allow_html=True)
+        elif MVP_MODE:
+            # ---- MVP output: just the numbers ------------------------------
+            for dt in sorted(fc["Date"].unique()):
+                g = fc[fc["Date"] == dt]
+                tot = int(g["pred"].sum())
+                st.markdown(
+                    f'<div class="fc-hero"><div class="fc-kicker">'
+                    f'{pd.Timestamp(dt):%A, %d %B %Y} · {len(g)} active counters</div>'
+                    f'<div class="fc-value">{tot:,} plates</div>'
+                    f'<div class="fc-sub">Predicted total lunch consumed</div></div>',
+                    unsafe_allow_html=True)
+                st.write("")
+                out = g[["Counter Name", "pred", "lo", "hi", "order", "risk"]].copy()
+                out.columns = ["Counter", "Predicted", "P10", "P90",
+                               "Suggested order", "Risk"]
+                for c in ["Predicted", "P10", "P90", "Suggested order"]:
+                    out[c] = out[c].astype(int)
+                st.dataframe(out, use_container_width=True, hide_index=True)
+
+            full_out = fc[["Date", "Counter Name", "pred", "lo", "hi", "order", "risk"]].copy()
+            full_out.columns = ["Date", "Counter", "Predicted", "P10", "P90",
+                                "Suggested order", "Risk"]
+            full_out["Date"] = pd.to_datetime(full_out["Date"]).dt.date
+            st.download_button("⬇️ Download predictions.csv",
+                               full_out.to_csv(index=False).encode(),
+                               file_name="predictions_out.csv", mime="text/csv",
+                               use_container_width=True)
         else:
             day_keys = sorted(fc["Date"].unique())
             for dt in day_keys:
@@ -506,93 +548,95 @@ with tab_fc:
                                    use_container_width=True)
 
 # ═════════════════════════════════════════════════════ HISTORY EXPLORER ══════
-with tab_hist:
-    st.subheader("What the counters have been doing")
+# History explorer — disabled in MVP mode
+if not MVP_MODE:
+    with tab_hist:
+        st.subheader("What the counters have been doing")
 
-    dmin, dmax = cd_hist["Date"].min().date(), cd_hist["Date"].max().date()
-    c1, c2 = st.columns([1, 1.4])
-    rng = c1.date_input("Date range", value=(max(dmin, dmax - timedelta(days=120)), dmax),
-                        min_value=dmin, max_value=dmax)
-    sel_counters = c2.multiselect("Counters", COUNTERS,
-                                  default=[c for c in COUNTERS if c != "North Non Veg"])
-    if len(rng) != 2:
-        st.stop()
-    view = cd_hist[(cd_hist["Date"].dt.date >= rng[0]) & (cd_hist["Date"].dt.date <= rng[1])
-                   & (cd_hist["Counter Name"].isin(sel_counters))]
+        dmin, dmax = cd_hist["Date"].min().date(), cd_hist["Date"].max().date()
+        c1, c2 = st.columns([1, 1.4])
+        rng = c1.date_input("Date range", value=(max(dmin, dmax - timedelta(days=120)), dmax),
+                            min_value=dmin, max_value=dmax)
+        sel_counters = c2.multiselect("Counters", COUNTERS,
+                                      default=[c for c in COUNTERS if c != "North Non Veg"])
+        if len(rng) != 2:
+            st.stop()
+        view = cd_hist[(cd_hist["Date"].dt.date >= rng[0]) & (cd_hist["Date"].dt.date <= rng[1])
+                       & (cd_hist["Counter Name"].isin(sel_counters))]
 
-    day_tot = view.groupby("Date").agg(total=("total", "first"), weekday=("weekday", "first"))
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Avg daily total", f"{day_tot['total'].mean():,.0f}" if len(day_tot) else "—",
-              help="Mean Total Lunch Consumed per working day in the selected window.")
-    m2.metric("Busiest weekday",
-              day_tot.groupby("weekday")["total"].mean().idxmax() if len(day_tot) else "—")
-    m3.metric("Peak day", f"{day_tot['total'].max():,.0f}" if len(day_tot) else "—")
-    m4.metric("Working days", f"{day_tot.shape[0]}")
-    st.write("")
+        day_tot = view.groupby("Date").agg(total=("total", "first"), weekday=("weekday", "first"))
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Avg daily total", f"{day_tot['total'].mean():,.0f}" if len(day_tot) else "—",
+                  help="Mean Total Lunch Consumed per working day in the selected window.")
+        m2.metric("Busiest weekday",
+                  day_tot.groupby("weekday")["total"].mean().idxmax() if len(day_tot) else "—")
+        m3.metric("Peak day", f"{day_tot['total'].max():,.0f}" if len(day_tot) else "—")
+        m4.metric("Working days", f"{day_tot.shape[0]}")
+        st.write("")
 
-    if view.empty:
-        st.info("No rows in the selected window — widen the date range or counters.")
-    else:
-        fig = go.Figure()
-        for c in [c for c in COUNTERS if c in sel_counters]:
-            sub = view[view["Counter Name"] == c]
-            fig.add_trace(go.Scatter(
-                x=sub["Date"], y=sub["consumed"], mode="lines", name=c,
-                line=dict(color=COUNTER_COLORS[c], width=2),
-                hovertemplate=f"<b>{c}</b><br>%{{x|%a %d %b %Y}}<br>%{{y:,.0f}} plates<extra></extra>",
-            ))
-        base_layout(fig, height=400,
-                    title=dict(text="Daily consumption per counter",
-                               font=dict(size=15, color=INK)),
-                    hovermode="x unified")
-        fig.update_yaxes(title_text="plates consumed", rangemode="tozero")
-        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CFG)
-
-        cA, cB = st.columns(2)
-        with cA:
-            wk = (view.groupby(["weekday", "Counter Name"])["consumed"].mean()
-                  .reset_index())
-            order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-            fig2 = go.Figure()
+        if view.empty:
+            st.info("No rows in the selected window — widen the date range or counters.")
+        else:
+            fig = go.Figure()
             for c in [c for c in COUNTERS if c in sel_counters]:
-                sub = wk[wk["Counter Name"] == c].set_index("weekday").reindex(order)
-                fig2.add_trace(go.Bar(
-                    x=order, y=sub["consumed"], name=c,
-                    marker_color=COUNTER_COLORS[c], width=0.18,
-                    hovertemplate=f"<b>{c}</b><br>%{{x}} mean %{{y:,.0f}} plates<extra></extra>",
+                sub = view[view["Counter Name"] == c]
+                fig.add_trace(go.Scatter(
+                    x=sub["Date"], y=sub["consumed"], mode="lines", name=c,
+                    line=dict(color=COUNTER_COLORS[c], width=2),
+                    hovertemplate=f"<b>{c}</b><br>%{{x|%a %d %b %Y}}<br>%{{y:,.0f}} plates<extra></extra>",
                 ))
-            base_layout(fig2, height=360,
-                        title=dict(text="Weekday profile (mean plates) — the dominant pattern",
-                                   font=dict(size=14, color=INK)),
-                        bargap=0.25, bargroupgap=0.12)
-            fig2.update_yaxes(rangemode="tozero")
-            st.plotly_chart(fig2, use_container_width=True, config=PLOTLY_CFG)
+            base_layout(fig, height=400,
+                        title=dict(text="Daily consumption per counter",
+                                   font=dict(size=15, color=INK)),
+                        hovermode="x unified")
+            fig.update_yaxes(title_text="plates consumed", rangemode="tozero")
+            st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CFG)
 
-        with cB:
-            shares = view.copy()
-            shares["share"] = shares["consumed"] / shares["total"]
-            sh = shares.groupby("Counter Name")["share"].agg(["mean", "std"]).reindex(
-                [c for c in COUNTERS if c in sel_counters])
-            fig3 = go.Figure(go.Bar(
-                x=sh.index, y=sh["mean"] * 100, width=0.4,
-                marker_color=[COUNTER_COLORS[c] for c in sh.index],
-                error_y=dict(type="data", array=sh["std"] * 100, color=INK2, thickness=1.4),
-                text=[f"{v*100:.0f}%" for v in sh["mean"]], textposition="outside",
-                textfont=dict(color=INK, size=12),
-                hovertemplate="<b>%{x}</b><br>mean share %{y:.1f}%<extra></extra>",
-            ))
-            base_layout(fig3, height=360, showlegend=False,
-                        title=dict(text="Share of the day per counter (±1σ) — SNV is the volatile one",
-                                   font=dict(size=14, color=INK)))
-            fig3.update_yaxes(title_text="% of daily total", rangemode="tozero")
-            st.plotly_chart(fig3, use_container_width=True, config=PLOTLY_CFG)
+            cA, cB = st.columns(2)
+            with cA:
+                wk = (view.groupby(["weekday", "Counter Name"])["consumed"].mean()
+                      .reset_index())
+                order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+                fig2 = go.Figure()
+                for c in [c for c in COUNTERS if c in sel_counters]:
+                    sub = wk[wk["Counter Name"] == c].set_index("weekday").reindex(order)
+                    fig2.add_trace(go.Bar(
+                        x=order, y=sub["consumed"], name=c,
+                        marker_color=COUNTER_COLORS[c], width=0.18,
+                        hovertemplate=f"<b>{c}</b><br>%{{x}} mean %{{y:,.0f}} plates<extra></extra>",
+                    ))
+                base_layout(fig2, height=360,
+                            title=dict(text="Weekday profile (mean plates) — the dominant pattern",
+                                       font=dict(size=14, color=INK)),
+                            bargap=0.25, bargroupgap=0.12)
+                fig2.update_yaxes(rangemode="tozero")
+                st.plotly_chart(fig2, use_container_width=True, config=PLOTLY_CFG)
 
-        with st.expander("🔎 Raw counter-day table"):
-            st.dataframe(view.assign(Date=view["Date"].dt.date)
-                         .rename(columns={"consumed": "Consumed", "ordered": "Ordered",
-                                          "total": "Day total", "weekday": "Weekday",
-                                          "items": "# items"}),
-                         use_container_width=True, hide_index=True)
+            with cB:
+                shares = view.copy()
+                shares["share"] = shares["consumed"] / shares["total"]
+                sh = shares.groupby("Counter Name")["share"].agg(["mean", "std"]).reindex(
+                    [c for c in COUNTERS if c in sel_counters])
+                fig3 = go.Figure(go.Bar(
+                    x=sh.index, y=sh["mean"] * 100, width=0.4,
+                    marker_color=[COUNTER_COLORS[c] for c in sh.index],
+                    error_y=dict(type="data", array=sh["std"] * 100, color=INK2, thickness=1.4),
+                    text=[f"{v*100:.0f}%" for v in sh["mean"]], textposition="outside",
+                    textfont=dict(color=INK, size=12),
+                    hovertemplate="<b>%{x}</b><br>mean share %{y:.1f}%<extra></extra>",
+                ))
+                base_layout(fig3, height=360, showlegend=False,
+                            title=dict(text="Share of the day per counter (±1σ) — SNV is the volatile one",
+                                       font=dict(size=14, color=INK)))
+                fig3.update_yaxes(title_text="% of daily total", rangemode="tozero")
+                st.plotly_chart(fig3, use_container_width=True, config=PLOTLY_CFG)
+
+            with st.expander("🔎 Raw counter-day table"):
+                st.dataframe(view.assign(Date=view["Date"].dt.date)
+                             .rename(columns={"consumed": "Consumed", "ordered": "Ordered",
+                                              "total": "Day total", "weekday": "Weekday",
+                                              "items": "# items"}),
+                             use_container_width=True, hide_index=True)
 
 # ═══════════════════════════════════════════════════ MODEL PERFORMANCE ═══════
 with tab_perf:
@@ -622,12 +666,15 @@ with tab_perf:
                "estimate. Validation's 9.10% over 120 rows is the conservative "
                "expectation for live months.")
 
-    st.markdown("**Baselines beaten on the same June window**")
+    st.markdown("**Baselines on the same June window**")
     base = pd.DataFrame({
         "Method": ["Final LightGBM model", "Same-weekday rolling-4 baseline",
                    "7-day moving average (business practice)"],
         "Counter WAPE %": [6.06, 7.70, 26.4],
     })
+    if MVP_MODE:
+        st.dataframe(base, use_container_width=True, hide_index=True)
+        st.stop()  # MVP: numbers only — chart + diagnostic figures disabled below
     figb = go.Figure(go.Bar(
         y=base["Method"][::-1], x=base["Counter WAPE %"][::-1], orientation="h",
         width=0.45,
@@ -657,11 +704,13 @@ with tab_perf:
         st.image(str(BUNDLE / "figs" / "eda_structure.png"), use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════ ABOUT ═══════
-with tab_about:
-    st.subheader("What this model is (and isn't)")
-    a, b = st.columns(2, gap="large")
-    with a:
-        st.markdown("""
+# About page — disabled in MVP mode
+if not MVP_MODE:
+    with tab_about:
+        st.subheader("What this model is (and isn't)")
+        a, b = st.columns(2, gap="large")
+        with a:
+            st.markdown("""
 ##### How a forecast is made
 1. **You provide tomorrow's plan** — the planned menu per active counter.
    Everything else the model needs (calendar, holidays, Panchangam, history)
