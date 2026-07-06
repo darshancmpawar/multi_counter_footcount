@@ -8,6 +8,7 @@ A clean, guided UI over the frozen LightGBM model bundle in ./siemens_model_bund
 
 Run:  streamlit run app.py
 """
+import io
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -158,7 +159,7 @@ st.markdown("""
 # ------------------------------------------------------------ data & model ---
 @st.cache_data(show_spinner="Loading history workbook…")
 def load_history(file_bytes: bytes | None) -> pd.DataFrame:
-    src = file_bytes if file_bytes is not None else DEFAULT_HISTORY
+    src = io.BytesIO(file_bytes) if file_bytes is not None else DEFAULT_HISTORY
     hist = pd.read_excel(src, sheet_name="Lunch Master")
     hist["Date"] = pd.to_datetime(hist["Date"])
     return hist
@@ -364,17 +365,30 @@ with tab_fc:
     with left:
         st.subheader("1 · Menu plan")
         mode = st.radio("How do you want to provide the plan?",
-                        ["🧾 Build it here", "📤 Upload plan.csv"],
+                        ["🧾 Build it here", "📤 Upload plan file"],
                         horizontal=True, label_visibility="collapsed")
 
-        if mode == "📤 Upload plan.csv":
-            with open(BUNDLE / "plan_template.csv", "rb") as f:
-                st.download_button("Download plan template", f,
-                                   file_name="plan_template.csv", mime="text/csv")
-            up_plan = st.file_uploader("plan.csv — one row per planned item", type=["csv"])
+        if mode == "📤 Upload plan file":
+            # template = bundle example + the two calendar feature columns
+            tmpl = pd.read_csv(BUNDLE / "plan_template.csv")
+            tmpl["Day Type"] = "Regular"
+            tmpl["Panchangam"] = "Regular"
+            st.download_button("Download plan template", tmpl.to_csv(index=False).encode(),
+                               file_name="plan_template.csv", mime="text/csv")
+            st.caption("One row per planned item. Required: **Date, Counter Name, "
+                       "Item Name, Category**. Also include **Day Type** "
+                       "(Regular / Previous Day of Holiday / Next Day of Holiday) and "
+                       "**Panchangam** (Regular or observances like Ekadashi, Poornima…) — "
+                       "both are prediction features; missing values default to Regular.")
+            up_plan = st.file_uploader("Plan file (.csv or .xlsx) — one row per planned item",
+                                       type=["csv", "xlsx", "xls"])
             if up_plan is not None:
                 try:
-                    pdf = pd.read_csv(up_plan)
+                    if up_plan.name.lower().endswith((".xlsx", ".xls")):
+                        pdf = pd.read_excel(up_plan)
+                    else:
+                        pdf = pd.read_csv(up_plan)
+                    pdf.columns = [str(c).strip() for c in pdf.columns]
                     missing = {"Date", "Counter Name", "Item Name", "Category"} - set(pdf.columns)
                     if missing:
                         st.error(f"Missing columns: {', '.join(sorted(missing))}")
@@ -390,8 +404,23 @@ with tab_fc:
                             }
                             st.success(f"Plan loaded — {pdf['Date'].nunique()} day(s), "
                                        f"{len(pdf)} item rows.")
+                            for col in ("Day Type", "Panchangam"):
+                                if col in pdf.columns:
+                                    used = sorted(pdf[col].dropna().astype(str).unique())
+                                    st.caption(f"✓ {col} column detected: {', '.join(used)}")
+                                else:
+                                    st.warning(f"No **{col}** column — assuming Regular for "
+                                               "all days. Add it if any plan day is "
+                                               "holiday-adjacent or an observance day; "
+                                               "it changes the prediction.")
+                            bad_dt = (set(pdf["Day Type"].dropna().astype(str).unique())
+                                      - set(DAY_TYPES)) if "Day Type" in pdf.columns else set()
+                            if bad_dt:
+                                st.warning(f"Unrecognised Day Type values (treated as Regular "
+                                           f"by the model): {', '.join(sorted(bad_dt))}. "
+                                           f"Expected: {', '.join(DAY_TYPES)}.")
                 except Exception as e:
-                    st.error(f"Could not parse that CSV: {e}")
+                    st.error(f"Could not parse that file: {e}")
 
         else:
             default_day = (last_day + timedelta(days=1)).date()
