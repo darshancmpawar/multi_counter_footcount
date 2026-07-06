@@ -264,14 +264,15 @@ with st.sidebar:
     last_day = hist["Date"].max()
     st.success(f"History loaded: **{hist['Date'].min():%d %b %Y} → {last_day:%d %b %Y}**  \n"
                f"{hist.shape[0]:,} item rows · {hist['Date'].nunique()} working days")
-    st.divider()
-    st.markdown(
-        "**Locked June test**  \n"
-        "Counter WAPE **6.06%** · Day WAPE **3.54%**  \n"
-        "vs moving-average practice **26.4%**"
-    )
-    st.caption("Predictions use only information available at vendor-ordering "
-               "time (the evening before service).")
+    if not MVP_MODE:  # sidebar model-stats blurb — disabled in the MVP
+        st.divider()
+        st.markdown(
+            "**Locked June test**  \n"
+            "Counter WAPE **6.06%** · Day WAPE **3.54%**  \n"
+            "vs moving-average practice **26.4%**"
+        )
+        st.caption("Predictions use only information available at vendor-ordering "
+                   "time (the evening before service).")
 
 cd_hist = counter_day_history(hist)
 items_by_counter, item_to_cat, last_menus = item_catalog(hist)
