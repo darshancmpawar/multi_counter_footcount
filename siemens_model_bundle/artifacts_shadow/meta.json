@@ -1,0 +1,49 @@
+{
+ "built_on": "2026-06-12",
+ "extra_features": [
+  "lag2",
+  "wd_lag2",
+  "ewm3",
+  "ewm7",
+  "gap_prev",
+  "gap_next"
+ ],
+ "challenger_params": {
+  "nl": 10,
+  "mcs": 8,
+  "ff": 0.35,
+  "rl": 0.5,
+  "l1": 0.5,
+  "lr": 0.015,
+  "bf": 0.8,
+  "bfreq": 1
+ },
+ "incumbent_params": {
+  "nl": 7,
+  "mcs": 10,
+  "ff": 0.6,
+  "rl": 1,
+  "lr": 0.03
+ },
+ "seeds": [
+  1,
+  42,
+  99
+ ],
+ "n_iters": {
+  "challenger_s1": 930,
+  "chal_fb_s1": 698,
+  "challenger_s42": 945,
+  "chal_fb_s42": 682,
+  "challenger_s99": 997,
+  "chal_fb_s99": 787,
+  "fb_point_s1": 543,
+  "fb_point_s42": 833,
+  "fb_point_s99": 736,
+  "fb_q10": 568,
+  "fb_q75": 1152,
+  "fb_q90": 398
+ },
+ "fb_cqr_Q80": 14.189856483179172,
+ "fb_order_corr": 1.8925056584599815
+}

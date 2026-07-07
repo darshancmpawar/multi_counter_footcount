@@ -233,8 +233,20 @@ def explain(row) -> str:
     return "; ".join(bits).capitalize() + "."
 
 
+@st.cache_resource(show_spinner=False)
+def load_shadow_models():
+    import shadow
+    return shadow.load_shadow()
+
+
 def run_forecast(hist: pd.DataFrame, plan: pd.DataFrame) -> pd.DataFrame:
-    """Score a plan exactly as the bundle's predict.py CLI does."""
+    """Score a plan. Official numbers come from the frozen incumbent when
+    yesterday's actuals are in the history (lag-1 fresh); when the history is
+    stale, the dedicated lag-2 fallback models take over (a lag-1 model fed
+    stale lags loses ~2.1pt WAPE; the fallback only ~0.5pt). The challenger
+    and blend are scored silently into shadow_log.csv for month-end review."""
+    import shadow
+
     plan = plan.copy()
     plan["Date"] = pd.to_datetime(plan["Date"])
     for col, default in [("Day Type", "Regular"), ("Panchangam", "Regular")]:
@@ -248,24 +260,59 @@ def run_forecast(hist: pd.DataFrame, plan: pd.DataFrame) -> pd.DataFrame:
     for col in ["Headcount", "Total Lunch Consumed", "Counter Ordered", "Counter Consumed"]:
         plan[col] = 0
 
+    # lag-1 availability: fresh = last served day is the working day right
+    # before the first plan day (<=1 business day gap)
+    last_hist = hist["Date"].max()
+    first_plan = plan["Date"].min()
+    bd_gap = int(np.busday_count(last_hist.date(), first_plan.date()))
+    regime = "fresh" if bd_gap <= 1 else "stale"
+    k = 1 if regime == "fresh" else 2
+
     full = pd.concat([hist, plan[hist.columns]], ignore_index=True)
-    cd = build_all(full)
+    cd = shadow.build_cd_k(full, k=k)
     target = cd[cd["Date"].isin(plan["Date"].unique())].copy()
+    X = shadow.design_lgb(target)
+    Xx = shadow.design_lgb(target, shadow.EXTRA_FEATURES)
 
-    models, cfg = load_models()
-    cat_levels = {"Counter Name": COUNTERS, "weekday": WEEKDAY_LEVELS}
-    X = target[NUM_FEATURES + CAT_FEATURES].copy()
-    for c in CAT_FEATURES:
-        X[c] = pd.Categorical(X[c], categories=cat_levels[c])
-
-    target["pred"] = np.clip(models["point"].predict(X), 0, None).round(0)
-    target["lo"] = np.clip(np.clip(models["q10"].predict(X), 0, None) - cfg["cqr_Q80"], 0, None).round(0)
-    target["hi"] = (np.clip(models["q90"].predict(X), 0, None) + cfg["cqr_Q80"]).round(0)
-    target["order"] = (np.clip(models["q75"].predict(X), 0, None) + cfg["order_corr"]).round(-1)
+    sh = load_shadow_models()
+    if regime == "fresh":
+        models, cfg = load_models()
+        target["pred"] = np.clip(models["point"].predict(X), 0, None).round(0)
+        target["lo"] = np.clip(np.clip(models["q10"].predict(X), 0, None) - cfg["cqr_Q80"], 0, None).round(0)
+        target["hi"] = (np.clip(models["q90"].predict(X), 0, None) + cfg["cqr_Q80"]).round(0)
+        target["order"] = (np.clip(models["q75"].predict(X), 0, None) + cfg["order_corr"]).round(-1)
+    else:  # dedicated lag-2 fallback set with its own conformal corrections
+        m = sh["meta"]
+        target["pred"] = shadow.seed_avg(sh["fb_point"], X).round(0)
+        target["lo"] = np.clip(np.clip(sh["fb_q10"].predict(X), 0, None) - m["fb_cqr_Q80"], 0, None).round(0)
+        target["hi"] = (np.clip(sh["fb_q90"].predict(X), 0, None) + m["fb_cqr_Q80"]).round(0)
+        target["order"] = (np.clip(sh["fb_q75"].predict(X), 0, None) + m["fb_order_corr"]).round(-1)
     width = (target["hi"] - target["lo"]) / target["pred"].clip(lower=1)
     target["risk"] = np.select([width > 0.45, width > 0.30], ["HIGH", "MEDIUM"], "LOW")
+    target["regime"] = regime
     if not MVP_MODE:  # plain-language explanations — disabled in the MVP
         target["why"] = target.apply(explain, axis=1)
+
+    # ---- silent shadow scoring (challenger + blend), logged for month-end ---
+    if sh is not None:
+        try:
+            chal = shadow.seed_avg(sh["challenger" if regime == "fresh" else "chal_fb"], Xx)
+            blend = np.full(len(target), np.nan)
+            if regime == "fresh" and sh["blend_et"] is not None:
+                be = sh["blend_et"]
+                Xsk, _, _ = shadow.design_sk(target, be["medians"], be["columns"])
+                blend = (shadow.BLEND_W * chal
+                         + (1 - shadow.BLEND_W) * np.clip(be["model"].predict(Xsk), 0, None))
+            shadow.log_shadow(
+                [{"Date": str(pd.Timestamp(d).date()), "Counter Name": c,
+                  "regime": regime, "pred_official": float(p), "pred_challenger": float(ch),
+                  "pred_blend": (None if np.isnan(bl) else float(bl)),
+                  "logged_at": pd.Timestamp.now().isoformat(timespec="seconds")}
+                 for d, c, p, ch, bl in zip(target["Date"], target["Counter Name"],
+                                            target["pred"], chal, blend)],
+                ROOT / "shadow_log.csv")
+        except Exception:
+            pass  # shadow logging must never break the official forecast
     return target.sort_values(["Date", "pred"], ascending=[True, False])
 
 
@@ -529,6 +576,16 @@ with tab_fc:
                 unsafe_allow_html=True)
         elif MVP_MODE:
             # ---- MVP output: just the numbers ------------------------------
+            if (fc["regime"] == "stale").any():
+                st.warning("Yesterday's actuals are not in the history yet — "
+                           "using the **lag-2 fallback model** (slightly wider "
+                           "uncertainty). Update the history workbook for the "
+                           "sharpest forecast.", icon="⏳")
+            if fc["Date"].nunique() > 1:
+                st.warning("Multi-day plan: predictions for day 2 onwards can't "
+                           "see the earlier days' actuals and are less reliable. "
+                           "For best accuracy forecast one day at a time with "
+                           "updated history.", icon="📅")
             for dt in sorted(fc["Date"].unique()):
                 g = fc[fc["Date"] == dt]
                 tot = int(g["pred"].sum())

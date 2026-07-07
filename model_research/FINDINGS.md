@@ -75,3 +75,82 @@ outside the current feature set:
 
 Reproduce: `python3 -c "from harness import *; ..."` — `harness.py` holds the
 splits, CV folds, fitting and metric code used for every number above.
+
+---
+
+# Round 2 — accuracy target, algorithm sweep, lag fallback (Jul 2026)
+
+## Is "3–5% WAPE or ≤30 pax" achievable? (critical evaluation)
+
+- **Pure counting noise floor: 3.36% WAPE.** If demand were Poisson at the
+  observed levels (~543 pax mean), a PERFECT model of the true rate would
+  still score 3.36% — ±23 pax per counter-day is one sigma of pure chance.
+  A 3% target at counter-day grain is below the physical floor. **4–5% is
+  the theoretical best-case zone**; the frozen model's June median error is
+  already exactly 30 pax (50% of rows within 30 pax).
+- Empirical repeatability (same counter + weekday + menu tier, consecutive
+  occurrences): actuals differ from each other by ~84 pax (≈11% single-obs
+  bound including real signal). The process itself does not repeat to 3%.
+- Conclusion: chase the remaining 6% → ~5% with data + shadow winner, but
+  **shortage elimination must come from the ORDER QUANTITY, not the point
+  forecast** (newsvendor logic).
+
+## "No shortage at all" is purchasable today (June 2026, 30 counter-days)
+
+| Order policy | Shortage days | Worst shortfall | Avg over-provision |
+|---|---|---|---|
+| Point forecast itself | 15/30 (50%) | 82 pax | 16 pax/day |
+| P75 + corr (current suggested order) | 9/30 (30%) | 120 pax | 49 pax/day |
+| P90 | 7/30 (23%) | 33 pax | 61 pax/day |
+| P90 + CQR widening | 4/30 (13%) | 5 pax | 84 pax/day |
+| **P90 + CQR + 5% buffer** | **0/30 (0%)** | **0 pax** | 119 pax/day |
+
+Pick the row whose wastage cost is acceptable; no new model required.
+
+## Full classical sweep (same 4-fold CV; deep learning not yet justified)
+
+Ranked: LGB blend **10.96** < LGB challenger 11.13 < ExtraTrees 11.35 <
+RandomForest 11.63 < LGB incumbent 11.81 < Lasso 11.96 < XGB-Poisson 12.02 ≈
+seasonal-naive wd_roll4 12.02 < kNN 12.07 < HistGB 12.56 < CatBoost 12.99 <
+seasonal-naive wd_lag1 14.30 < Ridge 14.92 < PoissonGLM 15.95 < SARIMAX
+(1,0,1)(1,0,1,5) 33.2 ≈ ETS 34.5 < SARIMAX+exog (unstable) < SVR 41.1.
+
+Pure time-series models fail because the signal is in the menu + lag
+covariates, which they cannot exploit. With 474–654 training rows, deep
+learning has no case yet (Tier-3 logic re-confirmed; revisit at ~2+ years of
+data). New best: **0.7·LGB-challenger + 0.3·ExtraTrees = 10.96** (beats LGB
+alone on all 4 folds) — added to the shadow run.
+
+## Lag-1 availability (order-time reality check)
+
+Simulated "yesterday's actuals missing" on all 4 CV folds:
+
+| Scenario | CV WAPE | vs normal |
+|---|---|---|
+| Lag-1 model, yesterday available | 11.13 | — |
+| Lag-1 model silently fed 2-day-old lags | 13.27 | **+2.13** |
+| Dedicated model trained on 2-day lags | 11.60 | **+0.47** |
+
+→ Built a dedicated **lag-2 fallback set** (point + q10/q75/q90 + its own
+conformal corrections: CQR ±14.2, order +1.9). The app auto-detects
+staleness (business-day gap from last history date to plan date > 1) and
+routes official numbers to the fallback with a visible notice.
+
+## Correctness incident (logged deliberately)
+
+The first lag-fallback experiment produced wrong numbers: extra lag columns
+were computed AFTER a dataframe merge that reset the index, misaligning
+groupby shifts. Caught by diffing the two pipelines column-by-column;
+verified the main pipeline (all Round-1/Round-2 headline numbers) was clean;
+re-ran the experiment fixed. Rule now encoded in shadow.py: all shift-chain
+features are computed on one frame before any merge.
+
+## Shadow mode (built)
+
+- `siemens_model_bundle/artifacts_shadow/` — frozen challenger (3 seeds),
+  ExtraTrees blend member, lag-2 fallbacks, meta.json.
+- Every app forecast silently logs official / challenger / blend to
+  `shadow_log.csv` (gitignored; deduped on Date+Counter).
+- Month-end: `python3 model_research/shadow_eval.py` joins actuals, scores
+  all three, bootstraps the difference and prints an adopt/keep/extend
+  verdict. Decision rule: adopt only if the 95% CI excludes zero.

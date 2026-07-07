@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 predictions_out.csv
 .streamlit/secrets.toml
+shadow_log.csv
