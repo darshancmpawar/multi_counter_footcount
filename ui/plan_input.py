@@ -19,7 +19,7 @@ STAR_ITEM_PATTERN = "Bir|bir|Mutton|Fish|Chicken|Paneer"
 
 
 def render_plan_input(history: pd.DataFrame, holiday_dates: set,
-                      include_drivers: bool) -> None:
+                      order_policy: str, include_drivers: bool) -> None:
     st.session_state.setdefault("plan_queue", {})
     st.session_state.setdefault("forecast_result", None)
 
@@ -32,7 +32,7 @@ def render_plan_input(history: pd.DataFrame, holiday_dates: set,
     else:
         _render_builder_section(history, holiday_dates)
     _render_plan_queue()
-    _render_run_button(history, holiday_dates, include_drivers)
+    _render_run_button(history, holiday_dates, order_policy, include_drivers)
 
 
 def _render_upload_section(holiday_dates: set) -> None:
@@ -208,7 +208,7 @@ def _render_plan_queue() -> None:
 
 
 def _render_run_button(history: pd.DataFrame, holiday_dates: set,
-                       include_drivers: bool) -> None:
+                       order_policy: str, include_drivers: bool) -> None:
     if not st.button("🔮  Run forecast", type="primary", use_container_width=True,
                      disabled=not st.session_state.plan_queue):
         return
@@ -221,5 +221,5 @@ def _render_run_button(history: pd.DataFrame, holiday_dates: set,
                  "Forecast only dates after the last served day.")
         return
     with st.spinner("Rebuilding lag features and scoring…"):
-        st.session_state.forecast_result = run_forecast(history, plan,
-                                                        holiday_dates, include_drivers)
+        st.session_state.forecast_result = run_forecast(
+            history, plan, holiday_dates, order_policy, include_drivers)

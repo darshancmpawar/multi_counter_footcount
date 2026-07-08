@@ -154,3 +154,55 @@ features are computed on one frame before any merge.
 - Month-end: `python3 model_research/shadow_eval.py` joins actuals, scores
   all three, bootstraps the difference and prints an adopt/keep/extend
   verdict. Decision rule: adopt only if the 95% CI excludes zero.
+
+---
+
+# Round 3 — subcat verdict, shadow roster, calendar-gap fix (Jul 2026)
+
+**Rule zero adopted: June 2026 is retired as an evaluation set.** The July
+shadow month is the only referee from here on.
+
+## Dataset v2 swapped in
+
+Same target (cc verified identical), Day Type column now derived live from
+the Holiday List (reproduces old labels 203/203), plus curated **Sub
+Category** (75 groups) and Review Flag columns. Incumbent feature values
+verified bit-identical after the swap.
+
+## gap_next leak found and fixed
+
+The data-derived gap_next "knew" about the two unplanned closures a day
+early. Now computed from the calendar (weekends + Holiday List) — genuinely
+known at T−1, defined at scoring time (the old version was NaN on the plan
+date), and the truncation gate passes. Baseline moved 11.13 → 11.08.
+
+## Round-3 candidates, re-validated on this harness
+
+| Candidate | CV WAPE | Verdict |
+|---|---|---|
+| challenger + gap interactions (2) | **10.80** | confirmed, all-fold gain → in challenger4 |
+| + subcat features (4 reconstructions tried) | 10.72–11.30 | NOT reproduced (claimed 10.43); best variant −0.08 = noise. Parked until the exact round-3 definitions are shareable; enters shadow only as their own pre-registered entrant |
+| tuned ExtraTrees (msl=5, mf=0.6) | **10.70** | shadow entrant |
+| tuned KNN (k=10, L1, distance, scaled) | 10.92 | hybrid member |
+| hybrid 0.65·LGB + 0.35·KNN | **10.40** | shadow entrant (0.50 weight scored 10.35; kept 0.65 as pre-specified) |
+
+## July shadow roster (frozen before actuals accumulate)
+
+official (frozen incumbent) · challenger4 (LGB, +8 features, 3 seeds) ·
+tuned ExtraTrees · hybrid LGB+KNN. Logged by the app and `shadow_run.py`;
+`shadow_eval.py` scores counter+day WAPE with paired bootstrap and prints
+adopt/keep verdicts. Lag-2 fallbacks rebuilt on the same pipeline.
+
+## Kitchen benchmark (verified, now in evaluate.py)
+
+WAPE(Ordered vs Consumed): **7.79% lifetime · 6.91% June**, June bias −40
+plates, short on **93% of June days** — systematic under-ordering. This is
+the business KPI line; the ordering fix is the quantile heads (order-policy
+selector now in the app: P75 / P90+CQR / P90+CQR+5%).
+
+## Guard rails added
+
+`tests/test_leakage.py` (truncation invariance, 78 features × 2 cuts × 2 lag
+regimes) runs standalone and gates every retrain. Official scoring path
+regression-anchored: replaying a pre-round-3 input reproduces 1,341 total
+exactly.

@@ -45,7 +45,9 @@ python3 retrain.py --promote     # deploys; previous models are backed up first
 ```
 
 **Challenger evaluation (shadow mode)** — every forecast silently logs the
-frozen model, the challenger and the blend to `shadow_log.csv`. At month end:
+official model and the pre-registered July roster (challenger4, tuned
+ExtraTrees, LGB+KNN hybrid) to `shadow_log.csv`; `python3 shadow_run.py
+--plan plan.csv` is the scriptable evening equivalent. At month end:
 
 ```bash
 python3 model_research/shadow_eval.py
@@ -60,6 +62,8 @@ excludes zero — a 30-row month cannot adjudicate a half-point difference.
 ```
 app.py                        Streamlit entry point (page config + routing)
 retrain.py                    monthly retraining pipeline (train → report → promote)
+shadow_run.py                 evening shadow scoring CLI (same log as the app)
+tests/test_leakage.py         truncation-invariance gate (also runs in every retrain)
 requirements.txt
 Lunch_Master_Data_FINAL(cleaned).xlsx   history workbook (Aug 2025 – Jun 2026)
 HANDOFF.md                    full modelling handoff / methodology

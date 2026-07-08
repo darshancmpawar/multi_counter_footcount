@@ -40,15 +40,8 @@ def load_holiday_dates(uploaded_bytes: bytes | None) -> set:
 @st.cache_resource(show_spinner="Loading frozen model bundle…")
 def load_incumbent_models():
     """The frozen, June-anchored production boosters + conformal config."""
-    import pickle
-    import lightgbm as lgb
-
-    artifacts = BUNDLE_DIR / "artifacts"
-    with open(artifacts / "final_config.pkl", "rb") as f:
-        conformal_config = pickle.load(f)
-    boosters = {name: lgb.Booster(model_file=str(artifacts / f"model_{name}.txt"))
-                for name in ("point", "q10", "q75", "q90")}
-    return boosters, conformal_config
+    import shadow
+    return shadow.load_incumbent()
 
 
 @st.cache_resource(show_spinner=False)

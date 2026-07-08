@@ -39,8 +39,11 @@ REPO_ROOT = Path(__file__).resolve().parent
 BUNDLE_DIR = REPO_ROOT / "siemens_model_bundle"
 sys.path.insert(0, str(BUNDLE_DIR))
 
-from shadow import (BLEND_W, CHALLENGER_PARAMS, EXTRA_FEATURES,  # noqa: E402
+import auto_calendar  # noqa: E402
+from shadow import (CHALLENGER4_FEATURES, CHALLENGER_PARAMS,  # noqa: E402
                     INCUMBENT_PARAMS, build_cd_k, design_lgb, design_sk)
+sys.path.insert(0, str(REPO_ROOT))
+from tests.test_leakage import run_leakage_test  # noqa: E402
 
 REPORT_DIR = REPO_ROOT / "model_research" / "retrain_reports"
 QUANTILES = (0.10, 0.75, 0.90)
@@ -143,44 +146,51 @@ def train_official_set(trainer: ModelTrainer, output_dir: Path) -> dict:
 
 def train_shadow_set(fresh: ModelTrainer, stale: ModelTrainer,
                      output_dir: Path) -> dict:
-    """Challenger (3 seeds), ExtraTrees blend member, and the lag-2 fallback
-    set, saved with the artifact names shadow.load_shadow expects."""
+    """Shadow roster (challenger4, tuned ExtraTrees, KNN for the hybrid) and
+    the lag-2 fallback set, saved with the names shadow.load_shadow expects."""
     from sklearn.ensemble import ExtraTreesRegressor
+    from sklearn.neighbors import KNeighborsRegressor
+    from sklearn.preprocessing import StandardScaler
 
     meta = {"built_on": str(fresh.full["Date"].max().date()),
-            "extra_features": EXTRA_FEATURES,
+            "challenger4_features": CHALLENGER4_FEATURES,
             "challenger_params": CHALLENGER_PARAMS,
             "incumbent_params": INCUMBENT_PARAMS,
+            "hybrid_lgb_weight": 0.65,
             "seeds": list(SEEDS), "n_iters": {}}
     scores = {}
 
     challengers, challenger_val, iters = fresh.fit_seed_averaged(
-        CHALLENGER_PARAMS, EXTRA_FEATURES)
+        CHALLENGER_PARAMS, CHALLENGER4_FEATURES)
     for seed, booster in zip(SEEDS, challengers):
-        booster.save_model(str(output_dir / f"challenger_s{seed}.txt"))
-        meta["n_iters"][f"challenger_s{seed}"] = iters[seed]
+        booster.save_model(str(output_dir / f"challenger4_s{seed}.txt"))
+        meta["n_iters"][f"challenger4_s{seed}"] = iters[seed]
     scores["challenger_val_wape"] = wape(fresh.val["cc"], challenger_val)
 
     features_full, medians, columns = design_sk(fresh.full)
     features_train, _, _ = design_sk(fresh.train, medians, columns)
     features_val, _, _ = design_sk(fresh.val, medians, columns)
-    tree_config = dict(n_estimators=500, min_samples_leaf=5, max_features=0.4,
+    tree_config = dict(n_estimators=500, min_samples_leaf=5, max_features=0.6,
                        n_jobs=-1, random_state=42)
-    blend_probe = ExtraTreesRegressor(**tree_config).fit(features_train,
-                                                         fresh.train["cc"])
-    blend_val = (BLEND_W * challenger_val
-                 + (1 - BLEND_W) * np.clip(blend_probe.predict(features_val), 0, None))
-    scores["blend_val_wape"] = wape(fresh.val["cc"], blend_val)
-    blend_final = ExtraTreesRegressor(**tree_config).fit(features_full,
-                                                         fresh.full["cc"])
-    joblib.dump({"model": blend_final, "medians": medians,
-                 "columns": list(columns)}, output_dir / "blend_et.joblib")
+    et_probe = ExtraTreesRegressor(**tree_config).fit(features_train,
+                                                      fresh.train["cc"])
+    scores["et_val_wape"] = wape(fresh.val["cc"],
+                                 np.clip(et_probe.predict(features_val), 0, None))
+    et_final = ExtraTreesRegressor(**tree_config).fit(features_full, fresh.full["cc"])
+    joblib.dump({"model": et_final, "medians": medians,
+                 "columns": list(columns)}, output_dir / "et_tuned.joblib")
+
+    scaler = StandardScaler().fit(features_full)
+    knn = KNeighborsRegressor(n_neighbors=10, weights="distance", p=1)
+    knn.fit(scaler.transform(features_full), fresh.full["cc"])
+    joblib.dump({"model": knn, "scaler": scaler, "medians": medians,
+                 "columns": list(columns)}, output_dir / "knn.joblib")
 
     fallback_challengers, _, fb_iters = stale.fit_seed_averaged(
-        CHALLENGER_PARAMS, EXTRA_FEATURES)
+        CHALLENGER_PARAMS, CHALLENGER4_FEATURES)
     for seed, booster in zip(SEEDS, fallback_challengers):
-        booster.save_model(str(output_dir / f"chal_fb_s{seed}.txt"))
-        meta["n_iters"][f"chal_fb_s{seed}"] = fb_iters[seed]
+        booster.save_model(str(output_dir / f"chal4_fb_s{seed}.txt"))
+        meta["n_iters"][f"chal4_fb_s{seed}"] = fb_iters[seed]
 
     fallback_points, fallback_val, fp_iters = stale.fit_seed_averaged(INCUMBENT_PARAMS)
     for seed, booster in zip(SEEDS, fallback_points):
@@ -228,8 +238,8 @@ def write_report(path: Path, context: dict) -> None:
         "| Model (validation WAPE %) | New |",
         "|---|---|",
         f"| Official point (incumbent architecture) | {context['official']['val_wape']:.2f} |",
-        f"| Challenger (3-seed) | {context['shadow']['challenger_val_wape']:.2f} |",
-        f"| Blend (0.7 challenger + 0.3 ExtraTrees) | {context['shadow']['blend_val_wape']:.2f} |",
+        f"| Challenger4 (3-seed) | {context['shadow']['challenger_val_wape']:.2f} |",
+        f"| Tuned ExtraTrees | {context['shadow']['et_val_wape']:.2f} |",
         f"| Lag-2 fallback point | {context['shadow']['fallback_val_wape']:.2f} |",
         f"| Seasonal baseline (wd_roll4) | {context['baseline_val_wape']:.2f} |",
         "",
@@ -286,12 +296,16 @@ def main() -> None:
 
     history = pd.read_excel(args.history, sheet_name="Lunch Master")
     history["Date"] = pd.to_datetime(history["Date"])
+    holiday_dates = auto_calendar.load_holiday_dates(args.history)
     as_of = history["Date"].max()
     val_start = as_of - pd.DateOffset(months=args.val_months) + pd.Timedelta(days=1)
 
+    print("Leakage gate…")
+    if not run_leakage_test(history, verbose=True):
+        sys.exit("LEAKAGE TEST FAILED — refusing to retrain.")
     print(f"History through {as_of.date()}; validation window starts {val_start.date()}")
-    counter_days_fresh = build_cd_k(history, k=1)
-    counter_days_stale = build_cd_k(history, k=2)
+    counter_days_fresh = build_cd_k(history, k=1, holiday_dates=holiday_dates)
+    counter_days_stale = build_cd_k(history, k=2, holiday_dates=holiday_dates)
     fresh = ModelTrainer(counter_days_fresh, val_start)
     stale = ModelTrainer(counter_days_stale, val_start)
     if len(fresh.val) < 30 or len(fresh.train) < 200:

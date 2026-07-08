@@ -1,12 +1,21 @@
 {
  "built_on": "2026-06-12",
- "extra_features": [
+ "challenger4_features": [
   "lag2",
   "wd_lag2",
   "ewm3",
   "ewm7",
   "gap_prev",
-  "gap_next"
+  "gap_next",
+  "sc_pop_mean",
+  "sc_pop_max",
+  "sc_rel_pop",
+  "sc_dsl_mean",
+  "sc_repeat2",
+  "sc_novel14",
+  "n_subcats",
+  "ix_wdshare_gap",
+  "ix_wdlag2_gap"
  ],
  "challenger_params": {
   "nl": 10,
@@ -25,18 +34,30 @@
   "rl": 1,
   "lr": 0.03
  },
+ "et_config": {
+  "n_estimators": 500,
+  "min_samples_leaf": 5,
+  "max_features": 0.6,
+  "random_state": 42
+ },
+ "knn_config": {
+  "n_neighbors": 10,
+  "weights": "distance",
+  "p": 1
+ },
+ "hybrid_lgb_weight": 0.65,
  "seeds": [
   1,
   42,
   99
  ],
  "n_iters": {
-  "challenger_s1": 930,
-  "chal_fb_s1": 698,
-  "challenger_s42": 945,
-  "chal_fb_s42": 682,
-  "challenger_s99": 997,
-  "chal_fb_s99": 787,
+  "challenger4_s1": 897,
+  "chal4_fb_s1": 662,
+  "challenger4_s42": 636,
+  "chal4_fb_s42": 602,
+  "challenger4_s99": 779,
+  "chal4_fb_s99": 616,
   "fb_point_s1": 543,
   "fb_point_s42": 833,
   "fb_point_s99": 736,

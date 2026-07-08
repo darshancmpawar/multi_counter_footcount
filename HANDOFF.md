@@ -84,3 +84,19 @@ To run July: keep the history file current through the last served day, prepare 
 ## 11. File manifest
 
 `features.py` (feature builder, leakage-audited) · `evaluate.py` (metric harness) · `predict.py` (July scoring CLI) · `plan_template.csv` (input format example) · `artifacts/model_point.txt`, `model_q10/75/90.txt` (frozen LightGBM boosters) · `artifacts/final_config.pkl` (hyperparams, iterations, conformal corrections) · `figs/` (EDA, learning curve, prediction-vs-actual plots).
+
+---
+
+## Appendix: prediction-time information contract (added July 2026)
+
+Known the evening before service (T−1), usable as features:
+calendar (weekday, month, gaps to adjacent working days), planned menu and
+active-counter plan (incl. Sub Category), Day Type derived from the workbook's
+Holiday List sheet, Panchangam computed astronomically (ephem), and all
+actuals through the previous working day (consumption, day totals) as
+shift-protected lags.
+
+NOT known at T−1, never same-day features: Headcount, Total Lunch Consumed,
+Counter Ordered, Receiving Qty, Bainmarie Wastage. These enter only as lags.
+When even yesterday's actuals are missing at ordering time, the dedicated
+lag-2 fallback models take over (tests/test_leakage.py guards both regimes).
