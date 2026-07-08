@@ -18,9 +18,12 @@ streamlit run app.py
 ```
 
 Build tomorrow's menu plan in the app (pre-filled with each counter's latest
-menu) or upload a `plan.csv`/`.xlsx`, hit **Run forecast**, and get per-counter
-demand, the calibrated P10–P90 range, a suggested order quantity and a risk
-level. The app currently runs in MVP mode (numbers only); set
+menu) or upload a `plan.csv`/`.xlsx` — just Date, Counter, Item and Category;
+**Day Type is derived automatically from the workbook's Holiday List sheet and
+Panchangam is computed astronomically from the date** (validated against all
+203 recorded days: 203/203 day types, 83/84 observances). Hit **Run
+forecast** and get per-counter demand, the calibrated P10–P90 range, a
+suggested order quantity and a risk level. The app currently runs in MVP mode (numbers only); set
 `MVP_MODE = False` in `app.py` for the full tool (driver explanations, result
 cards, charts, history explorer, model performance pages).
 
@@ -74,6 +77,7 @@ siemens_model_bundle/         the model itself
   predict.py                  CLI scorer (frozen)
   evaluate.py                 metric harness (frozen)
   shadow.py                   k-shift feature builder + shadow/fallback loading
+  auto_calendar.py            Day Type (holiday list) + Panchangam (ephem) derivation
   plan_template.csv           plan input format example
   artifacts/                  DEPLOYED boosters + conformal config
   artifacts_shadow/           challenger, blend member, lag-2 fallback set
@@ -83,6 +87,7 @@ model_research/               evidence behind every modelling decision
   FINDINGS.md                 research log: CV results, noise floor, sweeps
   harness.py                  expanding-window CV harness
   build_shadow_bundle.py      one-off builder for the current shadow set
+  validate_auto_calendar.py   checks the calendar derivation against recorded labels
   shadow_eval.py              month-end shadow comparison
   retrain_reports/            one report per retraining run
 ```

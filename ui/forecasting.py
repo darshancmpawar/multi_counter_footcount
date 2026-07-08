@@ -20,16 +20,17 @@ _PLACEHOLDER_ZERO = ["Headcount", "Total Lunch Consumed", "Counter Ordered",
                      "Counter Consumed"]
 
 
-def normalize_plan(plan: pd.DataFrame) -> pd.DataFrame:
+def normalize_plan(plan: pd.DataFrame, holiday_dates: set) -> pd.DataFrame:
     """Shape a plan (one row per planned item) like a history row so the
-    bundle's feature builder can consume it. Target-side columns get
-    placeholders that never enter the feature set."""
+    bundle's feature builder can consume it. Day Type and Panchangam are
+    auto-derived from the date (holiday list + astronomy); user-provided
+    values win. Target-side columns get placeholders that never enter the
+    feature set."""
+    import auto_calendar
+
     plan = plan.copy()
     plan["Date"] = pd.to_datetime(plan["Date"])
-    for column, default in [("Day Type", "Regular"), ("Panchangam", "Regular")]:
-        if column not in plan:
-            plan[column] = default
-        plan[column] = plan[column].fillna(default)
+    plan = auto_calendar.fill_calendar_columns(plan, holiday_dates)
     plan["Month"] = plan["Date"].dt.month_name()
     plan["Weekday"] = plan["Date"].dt.day_name()
     for column in _PLACEHOLDER_NAN:
@@ -102,12 +103,12 @@ def _log_shadow_predictions(target: pd.DataFrame, extra_features,
 
 
 def run_forecast(history: pd.DataFrame, plan: pd.DataFrame,
-                 include_drivers: bool = False) -> pd.DataFrame:
+                 holiday_dates: set, include_drivers: bool = False) -> pd.DataFrame:
     """Score a plan and return one row per Date + Counter with
     FORECAST_COLUMNS (+ 'drivers' when include_drivers)."""
     import shadow
 
-    plan = normalize_plan(plan)
+    plan = normalize_plan(plan, holiday_dates)
     regime = detect_lag_regime(history, plan)
     lag_depth = 1 if regime == "fresh" else 2
 

@@ -18,7 +18,8 @@ BUILD_MODE, UPLOAD_MODE = "🧾 Build it here", "📤 Upload plan file"
 STAR_ITEM_PATTERN = "Bir|bir|Mutton|Fish|Chicken|Paneer"
 
 
-def render_plan_input(history: pd.DataFrame, include_drivers: bool) -> None:
+def render_plan_input(history: pd.DataFrame, holiday_dates: set,
+                      include_drivers: bool) -> None:
     st.session_state.setdefault("plan_queue", {})
     st.session_state.setdefault("forecast_result", None)
 
@@ -27,24 +28,23 @@ def render_plan_input(history: pd.DataFrame, include_drivers: bool) -> None:
                           [BUILD_MODE, UPLOAD_MODE],
                           horizontal=True, label_visibility="collapsed")
     if input_mode == UPLOAD_MODE:
-        _render_upload_section()
+        _render_upload_section(holiday_dates)
     else:
-        _render_builder_section(history)
+        _render_builder_section(history, holiday_dates)
     _render_plan_queue()
-    _render_run_button(history, include_drivers)
+    _render_run_button(history, holiday_dates, include_drivers)
 
 
-def _render_upload_section() -> None:
+def _render_upload_section(holiday_dates: set) -> None:
     template = pd.read_csv(BUNDLE_DIR / "plan_template.csv")
-    template["Day Type"] = "Regular"
-    template["Panchangam"] = "Regular"
+    template = template[["Date", "Counter Name", "Item Name", "Category"]]
     st.download_button("Download plan template", template.to_csv(index=False).encode(),
                        file_name="plan_template.csv", mime="text/csv")
-    st.caption("One row per planned item. Required: **Date, Counter Name, "
-               "Item Name, Category**. Also include **Day Type** "
-               "(Regular / Previous Day of Holiday / Next Day of Holiday) and "
-               "**Panchangam** (Regular or observances like Ekadashi, Poornima…) — "
-               "both are prediction features; missing values default to Regular.")
+    st.caption("One row per planned item: **Date, Counter Name, Item Name, "
+               "Category** — that's all. Day Type is derived from the "
+               "workbook's holiday list and Panchangam is computed "
+               "astronomically from the date. (If you do include those "
+               "columns, your values win.)")
     uploaded = st.file_uploader("Plan file (.csv or .xlsx) — one row per planned item",
                                 type=["csv", "xlsx", "xls"])
     if uploaded is None:
@@ -74,28 +74,40 @@ def _render_upload_section() -> None:
         for date, day_rows in plan.groupby("Date")
     }
     st.success(f"Plan loaded — {plan['Date'].nunique()} day(s), {len(plan)} item rows.")
-    _report_calendar_columns(plan)
+    _report_calendar_columns(plan, holiday_dates)
 
 
-def _report_calendar_columns(plan: pd.DataFrame) -> None:
-    for column in ("Day Type", "Panchangam"):
-        if column in plan.columns:
-            values = sorted(plan[column].dropna().astype(str).unique())
-            st.caption(f"✓ {column} column detected: {', '.join(values)}")
-        else:
-            st.warning(f"No **{column}** column — assuming Regular for all days. "
-                       "Add it if any plan day is holiday-adjacent or an "
-                       "observance day; it changes the prediction.")
+def _report_calendar_columns(plan: pd.DataFrame, holiday_dates: set) -> None:
+    import auto_calendar
+
+    overridden = [c for c in ("Day Type", "Panchangam") if c in plan.columns]
+    if overridden:
+        st.caption(f"✓ Using your provided {' and '.join(overridden)} values "
+                   "(auto-derivation fills any blanks).")
+    else:
+        derived = {d: (auto_calendar.derive_day_type(d, holiday_dates),
+                       auto_calendar.derive_panchangam(d))
+                   for d in pd.to_datetime(plan["Date"]).dt.date.unique()}
+        summary = " · ".join(
+            f"{d:%d %b}: {dt}" + (f", {pan}" if pan != "Regular" else "")
+            for d, (dt, pan) in sorted(derived.items()))
+        st.caption(f"✓ Day Type & Panchangam auto-derived — {summary}")
     if "Day Type" in plan.columns:
         unrecognised = set(plan["Day Type"].dropna().astype(str).unique()) - set(DAY_TYPES)
         if unrecognised:
             st.warning(f"Unrecognised Day Type values (treated as Regular by the "
                        f"model): {', '.join(sorted(unrecognised))}. "
                        f"Expected: {', '.join(DAY_TYPES)}.")
+    for d in pd.to_datetime(plan["Date"]).dt.date.unique():
+        if not auto_calendar.holiday_list_covers(holiday_dates, d):
+            st.warning(f"The holiday list doesn't cover {d.year} — holiday-"
+                       "adjacent days can't be detected. Update the Holiday "
+                       "List sheet in the workbook.")
+            break
 
 
-def _render_builder_section(history: pd.DataFrame) -> None:
-    from features import PAN_FLAGS
+def _render_builder_section(history: pd.DataFrame, holiday_dates: set) -> None:
+    import auto_calendar
 
     items_by_counter, category_by_item, latest_menus = item_catalog(history)
     last_served = history["Date"].max()
@@ -104,13 +116,17 @@ def _render_builder_section(history: pd.DataFrame) -> None:
     while next_working_day.weekday() >= 5:
         next_working_day += timedelta(days=1)
 
-    date_col, day_type_col = st.columns(2)
-    service_date = date_col.date_input("Service date", value=next_working_day,
-                                       min_value=(last_served + timedelta(days=1)).date())
-    day_type = day_type_col.selectbox("Day type", DAY_TYPES)
-    observances = st.multiselect("Panchangam observances (if any)", PAN_FLAGS,
-                                 help="Leave empty for a Regular day.")
-    panchangam = "; ".join(observances) if observances else "Regular"
+    service_date = st.date_input("Service date", value=next_working_day,
+                                 min_value=(last_served + timedelta(days=1)).date())
+
+    day_type = auto_calendar.derive_day_type(service_date, holiday_dates)
+    panchangam = auto_calendar.derive_panchangam(service_date)
+    calendar_note = day_type + ("" if panchangam == "Regular" else f" · {panchangam}")
+    st.caption(f"📅 Auto-derived from the date: **{calendar_note}**")
+    if not auto_calendar.holiday_list_covers(holiday_dates, service_date):
+        st.warning(f"The holiday list doesn't cover {service_date.year} — "
+                   "holiday-adjacent days can't be detected. Update the "
+                   "Holiday List sheet in the workbook.")
 
     is_weekend = service_date.weekday() >= 5
     if is_weekend:
@@ -191,7 +207,8 @@ def _render_plan_queue() -> None:
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
 
-def _render_run_button(history: pd.DataFrame, include_drivers: bool) -> None:
+def _render_run_button(history: pd.DataFrame, holiday_dates: set,
+                       include_drivers: bool) -> None:
     if not st.button("🔮  Run forecast", type="primary", use_container_width=True,
                      disabled=not st.session_state.plan_queue):
         return
@@ -204,4 +221,5 @@ def _render_run_button(history: pd.DataFrame, include_drivers: bool) -> None:
                  "Forecast only dates after the last served day.")
         return
     with st.spinner("Rebuilding lag features and scoring…"):
-        st.session_state.forecast_result = run_forecast(history, plan, include_drivers)
+        st.session_state.forecast_result = run_forecast(history, plan,
+                                                        holiday_dates, include_drivers)

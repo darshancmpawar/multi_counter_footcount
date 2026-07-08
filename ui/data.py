@@ -28,6 +28,15 @@ def load_history(uploaded_bytes: bytes | None) -> pd.DataFrame:
     return history
 
 
+@st.cache_data(show_spinner=False)
+def load_holiday_dates(uploaded_bytes: bytes | None) -> set:
+    """Holiday dates from the workbook's 'Holiday List' sheet — drives the
+    automatic Day Type derivation. Empty set if the sheet is missing."""
+    import auto_calendar
+    source = io.BytesIO(uploaded_bytes) if uploaded_bytes is not None else DEFAULT_HISTORY_XLSX
+    return auto_calendar.load_holiday_dates(source)
+
+
 @st.cache_resource(show_spinner="Loading frozen model bundle…")
 def load_incumbent_models():
     """The frozen, June-anchored production boosters + conformal config."""
