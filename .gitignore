@@ -3,3 +3,5 @@ __pycache__/
 predictions_out.csv
 .streamlit/secrets.toml
 shadow_log.csv
+siemens_model_bundle/artifacts_retrain_*/
+siemens_model_bundle/artifacts_backup_*/
