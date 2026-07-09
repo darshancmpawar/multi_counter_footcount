@@ -206,3 +206,67 @@ selector now in the app: P75 / P90+CQR / P90+CQR+5%).
 regimes) runs standalone and gates every retrain. Official scoring path
 regression-anchored: replaying a pre-round-3 input reproduces 1,341 total
 exactly.
+
+---
+
+# Round 4 — subcategory play: reproduced, challenged, corrected (Jul 2026)
+
+The round-3/4 playbook + exact subcat code (`subcat_features_exact.py`) were
+re-run under the official regression-anchored harness. Verdict protocol from
+the document followed exactly.
+
+## The −0.65 vs −0.08 discrepancy is resolved: it was the subcat COLUMN
+
+Running the *exact* code, 4-fold CV, both columns × both param sets:
+
+| subcat source | my params (poisson) | champion params (L2) |
+|---|---|---|
+| curated 75-group "Sub Category" | base 10.79 → **+0.37 (hurts)** | 10.51 → +0.14 (hurts) |
+| head-word derived (≥3 rule) | base 10.79 → **−0.49 (helps)** | 10.51 → −0.52 (helps) |
+
+My round-3 reconstruction used the curated column → it genuinely hurt, so my
+"−0.08 = noise" was correct *for that column*. The document's gain is real —
+it lives in the **head-word derivation**, not the curated one. Both were right
+about different objects. (Why crude head-word beats hand-curated: the last-
+token grouping happens to separate demand signatures better than the curated
+taxonomy; noted, not fully explained — the shadow month is the arbiter.)
+
+## Challenge: is the gain leakage-safe? (the real-world gate)
+
+- **As written the exact code LEAKS**: truncation invariance fails on all 6
+  popularity/recency features. Cause (Challenge 3): the head-word "≥3 distinct
+  items" grouping is recomputed on all visible data, so **12 items change
+  subcat label retroactively** as history grows — a past row's feature value
+  depends on the future.
+- **Fix — freeze the mapping at train time.** With a train-only frozen
+  head-word map: truncation invariance is **clean** at both cuts, and the
+  honest per-fold CV gain is **−0.41** (fold deltas −0.30/−0.50/−0.64/−0.18).
+  Only **−0.04** of the leaky −0.45 was the leak. The signal is genuine.
+
+## Defect found in my own round-3 freeze
+
+`challenger4` was frozen with the CURATED-column subcat features, which hurt
+~0.1pt (CV 10.91 vs 10.80 for interactions-only). Since no July actuals exist
+yet, correcting the pre-registered roster now is still pre-registration, not a
+mid-month edit. Corrected: subcat features rebuilt from the **frozen head-word
+mapping**; `build_cd_k` threads `subcat_map`; the map is stored in
+`meta.json` and applied identically at score time. Leakage gate re-run green.
+
+## Does this serve the goal (no shortage, no waste)?
+
+Honest framing: this is a **point-forecast** gain (~0.4pt CV WAPE, deep in the
+diminishing-returns zone above the 3.36% Poisson floor). Shortage/waste is a
+**service-level** decision driven by which quantile you order at — the
+order-policy selector, not the point model. The subcat play slightly tightens
+the quantiles; it does not by itself move the shortage/waste frontier. It is
+worth adopting *if* July shadow confirms it, but the money still lives in the
+order quantile (P90+CQR+5% = 0 shortage days in June) and in new information
+(day-ahead attendance), per Phase 9 of the playbook.
+
+## Disposition
+
+Head-word frozen-mapping subcat enters July as part of the corrected
+`challenger4` (leakage-safe, CV −0.41 vs interaction-only base). Adopt for
+August only on the shadow verdict with a bootstrap CI that excludes zero —
+same rule as everything else. Curated-column subcat: parked (do-not-add
+ledger), retest at higher n.

@@ -31,7 +31,7 @@ BUNDLE = Path(__file__).resolve().parent.parent / "siemens_model_bundle"
 sys.path.insert(0, str(BUNDLE))
 import auto_calendar  # noqa: E402
 from shadow import (CHALLENGER4_FEATURES, CHALLENGER_PARAMS, INCUMBENT_PARAMS,  # noqa: E402
-                    build_cd_k, design_lgb, design_sk)
+                    build_cd_k, design_lgb, design_sk, freeze_headword_map)
 
 HIST = Path(__file__).resolve().parent.parent / "Lunch_Master_Data_FINAL(cleaned).xlsx"
 OUT = BUNDLE / "artifacts_shadow"
@@ -73,8 +73,11 @@ def main():
     hist = pd.read_excel(HIST, sheet_name="Lunch Master")
     hist["Date"] = pd.to_datetime(hist["Date"])
     holidays = auto_calendar.load_holiday_dates(HIST)
-    cd1 = build_cd_k(hist, k=1, holiday_dates=holidays)
-    cd2 = build_cd_k(hist, k=2, holiday_dates=holidays)
+    # freeze the head-word subcat map on ALL current history (this is the
+    # train set at build time); stored in meta and reused verbatim at score time
+    subcat_map = freeze_headword_map(hist)
+    cd1 = build_cd_k(hist, k=1, holiday_dates=holidays, subcat_map=subcat_map)
+    cd2 = build_cd_k(hist, k=2, holiday_dates=holidays, subcat_map=subcat_map)
     meta = {"built_on": str(hist["Date"].max().date()),
             "challenger4_features": CHALLENGER4_FEATURES,
             "challenger_params": CHALLENGER_PARAMS,
@@ -82,6 +85,7 @@ def main():
             "et_config": {k: v for k, v in ET_CONFIG.items() if k != "n_jobs"},
             "knn_config": KNN_CONFIG,
             "hybrid_lgb_weight": HYBRID_LGB_WEIGHT,
+            "subcat_map": subcat_map,
             "seeds": list(SEEDS), "n_iters": {}}
 
     for seed in SEEDS:

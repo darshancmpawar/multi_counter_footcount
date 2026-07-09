@@ -15,7 +15,7 @@ sys.path.insert(0, str(REPO_ROOT / "siemens_model_bundle"))
 
 import auto_calendar  # noqa: E402
 from features import NUM_FEATURES  # noqa: E402
-from shadow import CHALLENGER4_FEATURES, build_cd_k  # noqa: E402
+from shadow import CHALLENGER4_FEATURES, build_cd_k, freeze_headword_map  # noqa: E402
 
 WORKBOOK = REPO_ROOT / "Lunch_Master_Data_FINAL(cleaned).xlsx"
 ALL_FEATURES = list(NUM_FEATURES) + CHALLENGER4_FEATURES
@@ -34,16 +34,19 @@ def run_leakage_test(history: pd.DataFrame | None = None, verbose: bool = True) 
         history = pd.read_excel(WORKBOOK, sheet_name="Lunch Master")
         history["Date"] = pd.to_datetime(history["Date"])
     holiday_dates = auto_calendar.load_holiday_dates(WORKBOOK)
+    subcat_map = freeze_headword_map(history)
 
     dates = sorted(history["Date"].unique())
     cuts = [dates[len(dates) // 3], dates[2 * len(dates) // 3]]
     passed = True
     for k in (1, 2):
-        full = (build_cd_k(history, k=k, holiday_dates=holiday_dates)
+        full = (build_cd_k(history, k=k, holiday_dates=holiday_dates,
+                           subcat_map=subcat_map)
                 .set_index(["Date", "Counter Name"]).sort_index())
         for cut in cuts:
             truncated = (build_cd_k(history[history["Date"] < cut], k=k,
-                                    holiday_dates=holiday_dates)
+                                    holiday_dates=holiday_dates,
+                                    subcat_map=subcat_map)
                          .set_index(["Date", "Counter Name"]).sort_index())
             visible = full[full.index.get_level_values("Date") < cut]
             leaking = [c for c in ALL_FEATURES

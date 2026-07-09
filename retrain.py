@@ -41,7 +41,8 @@ sys.path.insert(0, str(BUNDLE_DIR))
 
 import auto_calendar  # noqa: E402
 from shadow import (CHALLENGER4_FEATURES, CHALLENGER_PARAMS,  # noqa: E402
-                    INCUMBENT_PARAMS, build_cd_k, design_lgb, design_sk)
+                    INCUMBENT_PARAMS, build_cd_k, design_lgb, design_sk,
+                    freeze_headword_map)
 sys.path.insert(0, str(REPO_ROOT))
 from tests.test_leakage import run_leakage_test  # noqa: E402
 
@@ -157,6 +158,7 @@ def train_shadow_set(fresh: ModelTrainer, stale: ModelTrainer,
             "challenger_params": CHALLENGER_PARAMS,
             "incumbent_params": INCUMBENT_PARAMS,
             "hybrid_lgb_weight": 0.65,
+            "subcat_map": freeze_headword_map(fresh.full),
             "seeds": list(SEEDS), "n_iters": {}}
     scores = {}
 
@@ -304,8 +306,11 @@ def main() -> None:
     if not run_leakage_test(history, verbose=True):
         sys.exit("LEAKAGE TEST FAILED — refusing to retrain.")
     print(f"History through {as_of.date()}; validation window starts {val_start.date()}")
-    counter_days_fresh = build_cd_k(history, k=1, holiday_dates=holiday_dates)
-    counter_days_stale = build_cd_k(history, k=2, holiday_dates=holiday_dates)
+    subcat_map = freeze_headword_map(history)   # frozen on all training history
+    counter_days_fresh = build_cd_k(history, k=1, holiday_dates=holiday_dates,
+                                    subcat_map=subcat_map)
+    counter_days_stale = build_cd_k(history, k=2, holiday_dates=holiday_dates,
+                                    subcat_map=subcat_map)
     fresh = ModelTrainer(counter_days_fresh, val_start)
     stale = ModelTrainer(counter_days_stale, val_start)
     if len(fresh.val) < 30 or len(fresh.train) < 200:

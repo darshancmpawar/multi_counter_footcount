@@ -37,7 +37,7 @@ CAT_LEVELS = {"Counter Name": ["North Non Veg", "North Veg", "South Non Veg", "S
 BLEND_W = 0.7  # challenger weight in the LGB/ExtraTrees blend
 
 
-def build_cd_k(df, k=1, holiday_dates=None):
+def build_cd_k(df, k=1, holiday_dates=None, subcat_map=None):
     """features.build_all + the challenger features, with the daily lag chain
     shifted by k. IMPORTANT: all shift-chain columns are computed on one
     frame BEFORE any merge (merges reset the index and would misalign
@@ -85,7 +85,7 @@ def build_cd_k(df, k=1, holiday_dates=None):
     cd = cd.merge(dd, on="Date", how="left").merge(dw, on="Date", how="left") \
            .merge(dts, on="Date", how="left")
     cd = cd.sort_values(["Date", "Counter Name"]).reset_index(drop=True)
-    cd = _add_subcat_features(df, cd, k)
+    cd = _add_subcat_features(df, cd, k, subcat_map)
     cd["ix_wdshare_gap"] = cd["wd_share_roll4"] / (cd["gap_next"] + 1)
     cd["ix_wdlag2_gap"] = cd["wd_lag2"] / (cd["gap_next"] + 1)
     return cd
@@ -102,81 +102,76 @@ def _calendar_gap_next(date, holiday_dates):
     return gap
 
 
-_DSL_CAP_DAYS = 60      # days-since-last cap for never/rarely-seen subcats
-_STAPLE_SHARE = 0.5     # subcats on >50% of counter-days are staples: no signal
+_HEADWORD_MIN_ITEMS = 3   # a (Category, head-word) group needs >=3 distinct items
 
 
-def _add_subcat_features(item_df, cd, k):
-    """Menu-composition features from the curated Sub Category taxonomy.
+def freeze_headword_map(item_df):
+    """Item -> subcat label, derived ONCE on training data and stored in
+    meta.json. subcat = Category + '|' + last token of Item Name when that
+    (Category, head-word) group has >= 3 distinct items, else Category.
 
-    Leakage rules: popularity stats use target values (cc) and therefore lag
-    by k working days (matching the regime's information set); recency stats
-    (days-since-last, repeat, novel) use only menu APPEARANCES, which are
-    known in advance, and lag by one working day. Staple subcats that appear
-    on most counter-days carry no signal and are excluded from aggregates.
+    Freezing is mandatory: recomputing the >=3 rule on accumulating data
+    flips ~12 items' labels retroactively and breaks truncation invariance
+    (model_research/FINDINGS.md round 4). Novel items at score time fall back
+    to their Category via the fillna in _add_subcat_features."""
+    head = item_df["Item Name"].str.strip().str.split().str[-1].str.lower()
+    group_sizes = (item_df.assign(head=head)
+                   .groupby(["Category", "head"])["Item Name"].nunique())
+    valid = set(group_sizes[group_sizes >= _HEADWORD_MIN_ITEMS].index)
+    labels = np.where([(c, h) in valid for c, h in zip(item_df["Category"], head)],
+                      item_df["Category"] + "|" + head, item_df["Category"])
+    return dict(zip(item_df["Item Name"], labels))
+
+
+def _add_subcat_features(item_df, cd, k, subcat_map=None):
+    """Menu-composition features on the frozen head-word subcategory (the
+    variant that helps, leakage-safe with a frozen map — round 4).
+
+    Popularity = expanding mean of the WHOLE counter-day cc over the subcat's
+    own appearance sequence at that counter, shifted by k appearances.
+    Recency = calendar days since the subcat last appeared at that counter.
+    Aggregated over unique subcats per counter-day. NaNs left for LightGBM.
     """
     items = item_df.copy()
-    if "Sub Category" not in items or items["Sub Category"].isna().all():
-        items["Sub Category"] = items["Category"]
-    items["Sub Category"] = items["Sub Category"].fillna(items["Category"])
+    items["Date"] = pd.to_datetime(items["Date"])
+    if subcat_map is not None:
+        items["subcat"] = items["Item Name"].map(subcat_map).fillna(items["Category"])
+    elif "Sub Category" in items and not items["Sub Category"].isna().all():
+        items["subcat"] = items["Sub Category"].fillna(items["Category"]).astype(str)
+    else:
+        items["subcat"] = items["Category"].astype(str)
 
-    subcats_by_cd = (items.groupby([items["Date"].dt.normalize(), "Counter Name"])
-                     ["Sub Category"].agg(lambda s: sorted(set(s))))
-    dates = sorted(cd["Date"].unique())
-    date_index = {d: i for i, d in enumerate(dates)}
-    cc_by_cd = cd.set_index(["Date", "Counter Name"])["cc"].to_dict()
+    counter_day_cc = (items.groupby(["Date", "Counter Name"])["Counter Consumed"]
+                      .first().reset_index().rename(columns={"Counter Consumed": "cc_item"}))
+    presence = (items.groupby(["Date", "Counter Name", "subcat"]).size()
+                .reset_index(name="_n").merge(counter_day_cc, on=["Date", "Counter Name"]))
 
-    pop_sum, pop_count = {}, {}                  # per-subcat, lagged by k
-    overall_sum, overall_count = 0.0, 0
-    last_seen, appear_count = {}, {}             # per-subcat, lagged by 1
-    pending_pop = []                             # per-date cc contributions awaiting the k-lag
-    rows = {}
+    # popularity: expanding mean over the subcat's appearance sequence, shift k
+    presence = presence.sort_values(["Counter Name", "subcat", "Date"])
+    seq = presence.groupby(["Counter Name", "subcat"], group_keys=False)
+    presence["pop"] = seq["cc_item"].apply(lambda s: s.shift(k).expanding().mean())
+    presence["dsl"] = seq["Date"].diff().dt.days
 
-    for i, date in enumerate(dates):
-        # dates now k working days in the past enter the popularity stats
-        if len(pending_pop) >= k:
-            for subs, cc in pending_pop.pop(0):
-                if not np.isnan(cc):
-                    overall_sum += cc
-                    overall_count += 1
-                    for s in subs:
-                        pop_sum[s] = pop_sum.get(s, 0.0) + cc
-                        pop_count[s] = pop_count.get(s, 0) + 1
+    # rel-pop denominator: counter's own expanding mean cc, shift 1 day
+    cday = counter_day_cc.sort_values(["Counter Name", "Date"])
+    cday["cmean"] = (cday.groupby("Counter Name", group_keys=False)["cc_item"]
+                     .apply(lambda s: s.shift(1).expanding().mean()))
+    presence = presence.merge(cday[["Date", "Counter Name", "cmean"]],
+                              on=["Date", "Counter Name"])
 
-        day_rows = [(counter, subs) for (d, counter), subs in subcats_by_cd.items()
-                    if d == date]
-        for counter, subs in day_rows:
-            informative = [s for s in subs
-                           if appear_count.get(s, 0) <= _STAPLE_SHARE * max(i, 1)]
-            pops = [pop_sum[s] / pop_count[s] for s in informative
-                    if pop_count.get(s, 0) > 0]
-            overall_mean = overall_sum / overall_count if overall_count else np.nan
-            dsl = [min(i - last_seen[s], _DSL_CAP_DAYS) if s in last_seen
-                   else _DSL_CAP_DAYS for s in informative]
-            rows[(date, counter)] = {
-                "sc_pop_mean": np.mean(pops) if pops else np.nan,
-                "sc_pop_max": np.max(pops) if pops else np.nan,
-                "sc_rel_pop": (np.mean(pops) / overall_mean
-                               if pops and overall_mean else np.nan),
-                "sc_dsl_mean": np.mean(dsl) if dsl else np.nan,
-                "sc_repeat2": np.mean([d <= 2 for d in dsl]) if dsl else np.nan,
-                "sc_novel14": np.mean([d > 14 for d in dsl]) if dsl else np.nan,
-                "n_subcats": len(subs),
-            }
-        pending_pop.append([(subs, cc_by_cd.get((date, counter), np.nan))
-                            for counter, subs in day_rows])
-        # menu appearances become known history after the day itself
-        for counter, subs in day_rows:
-            for s in subs:
-                last_seen[s] = i
-                appear_count[s] = appear_count.get(s, 0) + 1
-
-    feature_frame = pd.DataFrame.from_dict(rows, orient="index")
-    feature_frame.index = pd.MultiIndex.from_tuples(feature_frame.index,
-                                                    names=["Date", "Counter Name"])
-    return cd.merge(feature_frame.reset_index(), on=["Date", "Counter Name"],
-                    how="left")
-
+    def _agg(group):
+        return pd.Series({
+            "sc_pop_mean": group["pop"].mean(),
+            "sc_pop_max": group["pop"].max(),
+            "sc_rel_pop": (group["pop"].mean() / group["cmean"].iloc[0]
+                           if pd.notna(group["cmean"].iloc[0]) else np.nan),
+            "sc_dsl_mean": group["dsl"].clip(upper=21).mean(),
+            "sc_repeat2": (group["dsl"] <= 2).mean(),
+            "sc_novel14": ((group["dsl"] > 14) | group["dsl"].isna()).mean(),
+            "n_subcats": group["subcat"].nunique(),
+        })
+    features = (presence.groupby(["Date", "Counter Name"]).apply(_agg).reset_index())
+    return cd.merge(features, on=["Date", "Counter Name"], how="left")
 
 def design_lgb(cd, extra=()):
     X = cd[list(NUM_FEATURES) + list(extra) + CAT_FEATURES].copy()
@@ -302,13 +297,16 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
     regime = detect_lag_regime(history, plan)
     lag_depth = 1 if regime == "fresh" else 2
 
+    shadow_models = load_shadow()
+    subcat_map = (shadow_models["meta"].get("subcat_map")
+                  if shadow_models is not None else None)
     combined = pd.concat([history, plan[history.columns]], ignore_index=True)
-    counter_days = build_cd_k(combined, k=lag_depth, holiday_dates=holiday_dates)
+    counter_days = build_cd_k(combined, k=lag_depth, holiday_dates=holiday_dates,
+                              subcat_map=subcat_map)
     target = counter_days[counter_days["Date"].isin(plan["Date"].unique())].copy()
     base_X = design_lgb(target)
     c4_X = design_lgb(target, CHALLENGER4_FEATURES)
 
-    shadow_models = load_shadow()
     policy = ORDER_POLICIES[order_policy]
     if regime == "fresh":
         boosters, config = load_incumbent()
