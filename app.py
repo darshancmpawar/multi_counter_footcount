@@ -62,6 +62,17 @@ def render_sidebar():
             f'{holiday_note}</div>',
             unsafe_allow_html=True)
 
+        st.divider()
+        st.markdown("**Order policy**")
+        import shadow
+        policy_keys = list(shadow.ORDER_POLICIES)
+        order_policy = st.selectbox(
+            "Suggested-order service level", policy_keys,
+            format_func=lambda k: shadow.ORDER_POLICIES[k]["label"],
+            help="Sets which calibrated quantile the suggested order uses. "
+                 "Higher service = fewer shortage days, more over-provision "
+                 "(trade-off table in model_research/FINDINGS.md).")
+
         if not MVP_MODE:
             st.divider()
             st.markdown("**Locked June test**  \n"
@@ -69,13 +80,14 @@ def render_sidebar():
                         "vs moving-average practice **26.4%**")
             st.caption("Predictions use only information available at "
                        "vendor-ordering time (the evening before service).")
-    return history, holiday_dates
+    return history, holiday_dates, order_policy
 
 
-def render_forecast_page(history, holiday_dates) -> None:
+def render_forecast_page(history, holiday_dates, order_policy) -> None:
     plan_column, results_column = st.columns([1.05, 1], gap="large")
     with plan_column:
-        render_plan_input(history, holiday_dates, include_drivers=not MVP_MODE)
+        render_plan_input(history, holiday_dates, order_policy,
+                          include_drivers=not MVP_MODE)
     with results_column:
         st.subheader("2 · Forecast")
         forecast = st.session_state.get("forecast_result")
@@ -89,7 +101,7 @@ def render_forecast_page(history, holiday_dates) -> None:
 
 
 def main() -> None:
-    history, holiday_dates = render_sidebar()
+    history, holiday_dates, order_policy = render_sidebar()
 
     branding.render_running_head()
     st.title("Lunch counter demand forecast")
@@ -97,7 +109,7 @@ def main() -> None:
     if MVP_MODE:
         st.caption("MVP — menu plan in, numbers out: per-counter demand, calibrated "
                    "range, suggested order and risk, one day ahead of service.")
-        render_forecast_page(history, holiday_dates)
+        render_forecast_page(history, holiday_dates, order_policy)
         return
 
     from ui import full_tool
@@ -106,7 +118,7 @@ def main() -> None:
     forecast_tab, history_tab, performance_tab, about_tab = st.tabs(
         ["🔮  Forecast", "📊  History explorer", "📈  Model performance", "ℹ️  About the model"])
     with forecast_tab:
-        render_forecast_page(history, holiday_dates)
+        render_forecast_page(history, holiday_dates, order_policy)
     with history_tab:
         full_tool.render_history_explorer(counter_day_history(history))
     with performance_tab:
