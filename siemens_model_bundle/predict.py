@@ -85,6 +85,8 @@ def main():
         plan[col] = np.nan
     for col in ['Headcount', 'Total Lunch Consumed', 'Counter Ordered', 'Counter Consumed']:
         plan[col] = 0
+    for col in hist.columns.difference(plan.columns):  # reference-only extras
+        plan[col] = np.nan
 
     full = pd.concat([hist, plan[hist.columns]], ignore_index=True)
     cd = build_all(full)

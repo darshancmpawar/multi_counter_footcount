@@ -65,7 +65,7 @@ retrain.py                    monthly retraining pipeline (train → report → 
 shadow_run.py                 evening shadow scoring CLI (same log as the app)
 tests/test_leakage.py         truncation-invariance gate (also runs in every retrain)
 requirements.txt
-Lunch_Master_Data_FINAL(cleaned).xlsx   history workbook (Aug 2025 – Jun 2026)
+Lunch_Master_Data_FINAL(cleaned).xlsx   history workbook (Aug 2025 – Jul 2026)
 HANDOFF.md                    full modelling handoff / methodology
 
 ui/                           Streamlit frontend package

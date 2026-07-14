@@ -294,6 +294,10 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
     frame with official columns plus a dict of shadow prediction arrays."""
     plan = normalize_plan(plan, holiday_dates)
     plan = _subcat_for_plan(history, plan)
+    # reference-only columns the workbook has but a plan never will
+    # (e.g. Festival) — NaN-fill so plan[history.columns] can't KeyError
+    for column in history.columns.difference(plan.columns):
+        plan[column] = np.nan
     regime = detect_lag_regime(history, plan)
     lag_depth = 1 if regime == "fresh" else 2
 

@@ -44,10 +44,20 @@ DAY_TYPE_AFTER_HOLIDAY = "Next Day of Holiday"
 # ------------------------------------------------------------- day type -----
 def load_holiday_dates(workbook, sheet_name: str = "Holiday List") -> set:
     """Set of holiday dates from the workbook (path, buffer or ExcelFile).
-    Empty set if the sheet is missing."""
+    Empty set if the sheet is missing.
+
+    Only closures that remove a working day count: rows marked 'Operated' in
+    the Facility Status column (the facility stayed open) and holidays falling
+    on weekends (no extra day off) would mislabel adjacent days as
+    holiday-adjacent — validated against the recorded Day Type labels."""
     try:
         holidays = pd.read_excel(workbook, sheet_name=sheet_name)
-        return set(pd.to_datetime(holidays["Date"]).dt.date)
+        dates = pd.to_datetime(holidays["Date"])
+        keep = dates.dt.weekday < 5
+        if "Facility Status" in holidays.columns:
+            status = holidays["Facility Status"].astype(str).str.strip().str.lower()
+            keep &= status != "operated"
+        return set(dates[keep].dt.date)
     except Exception:
         return set()
 
