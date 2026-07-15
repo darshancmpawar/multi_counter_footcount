@@ -146,9 +146,13 @@ def train_official_set(trainer: ModelTrainer, output_dir: Path) -> dict:
 
 
 def train_shadow_set(fresh: ModelTrainer, stale: ModelTrainer,
-                     output_dir: Path) -> dict:
+                     output_dir: Path, subcat_map: dict) -> dict:
     """Shadow roster (challenger4, tuned ExtraTrees, KNN for the hybrid) and
-    the lag-2 fallback set, saved with the names shadow.load_shadow expects."""
+    the lag-2 fallback set, saved with the names shadow.load_shadow expects.
+
+    subcat_map is the frozen item->subcat mapping built from item-level
+    history in main() (freeze_headword_map needs item rows; fresh.full is at
+    counter-day grain), stored verbatim in meta.json for identical scoring."""
     from sklearn.ensemble import ExtraTreesRegressor
     from sklearn.neighbors import KNeighborsRegressor
     from sklearn.preprocessing import StandardScaler
@@ -159,7 +163,7 @@ def train_shadow_set(fresh: ModelTrainer, stale: ModelTrainer,
             "festival_features": FESTIVAL_FEATURES,
             "incumbent_params": INCUMBENT_PARAMS,
             "hybrid_lgb_weight": 0.65,
-            "subcat_map": freeze_headword_map(fresh.full),
+            "subcat_map": subcat_map,
             "seeds": list(SEEDS), "n_iters": {}}
     scores = {}
 
@@ -339,7 +343,7 @@ def main() -> None:
     print("Training official set (point + quantiles + conformal)…")
     official_scores = train_official_set(fresh, output_dir)
     print("Training shadow set (challenger, blend, lag-2 fallbacks)…")
-    shadow_scores = train_shadow_set(fresh, stale, output_dir)
+    shadow_scores = train_shadow_set(fresh, stale, output_dir, subcat_map)
     with open(output_dir / "meta.json") as f:
         shadow_meta = json.load(f)
 
