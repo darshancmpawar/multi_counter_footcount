@@ -18,41 +18,41 @@ burned window 15 Jun–9 Jul reported but never selected on, **live data from
 10 Jul onward stays untouched** as the only clean confirmation.
 
 ## Item 1 — Production correctness (bugs that change served numbers) ✅ criteria: gates green, both regimes smoke-tested
-- [ ] 1a `requirements.txt`: add scikit-learn, joblib, pyarrow — a
+- [x] 1a `requirements.txt`: add scikit-learn, joblib, pyarrow — a
       requirements-only install crashes every forecast; this exact gap
       already silently killed the ET/KNN shadow entrants for weeks.
-- [ ] 1b `detect_lag_regime` holiday-aware — the first working day after any
+- [x] 1b `detect_lag_regime` holiday-aware — the first working day after any
       mid-week holiday is misrouted to the inferior lag-2 fallback (+wrong
       conformal margins) even though lag-1 is current. Verified repro.
-- [ ] 1c `predict.py` → thin wrapper over `shadow.score_plan` — the CLI today
+- [x] 1c `predict.py` → thin wrapper over `shadow.score_plan` — the CLI today
       is a divergent second implementation: no debias, no lag-2 fallback, no
       auto-calendar (Day Type silently 'Regular'), broken default history
       path; verified ~9% higher orders than the app on an identical plan.
-- [ ] 1d `score_plan` stale-regime crash when artifacts_shadow absent →
+- [x] 1d `score_plan` stale-regime crash when artifacts_shadow absent →
       clear RuntimeError instead of TypeError.
-- [ ] 1e Silent failures surfaced: `load_shadow` warns when an artifact
+- [x] 1e Silent failures surfaced: `load_shadow` warns when an artifact
       exists but fails to load; `ui/forecasting` shadow-log failures get a
       toast + log instead of `pass`; `auto_calendar` distinguishes
       missing-sheet from read-error.
 
 ## Item 2 — Dead code / duplication removal ✅ criteria: no behavior change, gates green
-- [ ] 2a One `wape()` (evaluate.py) imported everywhere (currently 5 copies);
+- [x] 2a One `wape()` (evaluate.py) imported everywhere (currently 5 copies);
       delete dead `features.design_matrix`, dead `evaluate.metrics` path.
-- [ ] 2b Delete `model_research/build_shadow_bundle.py` — superseded by
+- [x] 2b Delete `model_research/build_shadow_bundle.py` — superseded by
       retrain.py, and re-running it would clobber the festival keys in
       meta.json.
-- [ ] 2c Delete dead committed artifacts: model_q50.txt, featlist.pkl,
+- [x] 2c Delete dead committed artifacts: model_q50.txt, featlist.pkl,
       design_meta.pkl, lgb_params.pkl (referenced by no code; promote()
       never refreshes them).
-- [ ] 2d Cache model loading (boosters are re-read from disk on every
+- [x] 2d Cache model loading (boosters are re-read from disk on every
       forecast; the st.cache_resource loaders in ui/data.py are dead code);
       single CAT_LEVELS source; un-hardcode harness paths.
-- [ ] 2e Single source for driver-explanation text (duplicated verbatim).
-- [ ] 2f Make tests pytest-collectable; add unit tests: holiday regime case,
+- [x] 2e Single source for driver-explanation text (duplicated verbatim).
+- [x] 2f Make tests pytest-collectable; add unit tests: holiday regime case,
       debias gate on/off, plan-column filling.
 
 ## Item 3 — Data integrity for modeling
-- [ ] 3a Flag the 7 imputed-headcount dates; exclude from any
+- [x] 3a Flag the 7 imputed-headcount dates; exclude from any
       propensity/debias fitting; use −13.8% as the true drop.
 - [ ] 3b Client asks: confirm the Jun-15 menu/caterer overhaul; obtain
       orderlog_2026_06/07.csv (orderlog ends 25 May — it MISSES the shift
@@ -62,7 +62,7 @@ burned window 15 Jun–9 Jul reported but never selected on, **live data from
 ## Item 4 — Error-% reduction experiments (the actual ask)
 Ranked by expected value; each selected on the 6-fold CV, never on the
 burned window. Combinations of individual winners tested as a final matrix.
-- [ ] 4a **Menu-novelty features** (root-cause aligned, leakage-safe from the
+- [x] 4a **Menu-novelty features** — TESTED, NO GAIN (stable 12.15→12.15, shift 9.09→9.35): the signal is real (novelty doubled at the shift) but 3.5 weeks of post-shift data cannot teach the trees its coefficient. Parked; retest at the August retrain. Original rationale: (root-cause aligned, leakage-safe from the
       plan itself): per counter-day, share of planned items unseen at that
       counter in the prior 60/90 days; count of first-ever items; novelty ×
       is_veg. New-item share doubled at the shift (9.8%→15.2%) and correlates
