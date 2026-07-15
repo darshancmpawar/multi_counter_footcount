@@ -29,6 +29,17 @@ SUBCAT_FEATURES = ["sc_pop_mean", "sc_pop_max", "sc_rel_pop", "sc_dsl_mean",
                    "sc_repeat2", "sc_novel14", "n_subcats"]
 INTERACTION_FEATURES = ["ix_wdshare_gap", "ix_wdlag2_gap"]
 CHALLENGER4_FEATURES = EXTRA_FEATURES + SUBCAT_FEATURES + INTERACTION_FEATURES
+# calendar-known festival/holiday-severity flags (auto_calendar.festival_flags)
+# — pre-registered "festival" shadow entrant = incumbent features + these
+FESTIVAL_FEATURES = ["fest_any", "fest_op_today", "adj_hol_important",
+                     "adj_hol_compulsory", "adj_hol_shutdown"]
+
+# Trailing level-shift corrector for the OFFICIAL numbers (July 2026 round):
+# if >=80% of the last 10 served days erred in the same direction at day
+# level, scale the forecast by the trailing actual/predicted ratio (max
+# +/-15%). Gate keeps it dormant in stable regimes (CV-neutral); in the
+# June-July 2026 demand shift it recovered ~3.3pt counter WAPE.
+DEBIAS = {"window": 10, "min_days": 5, "gate": 0.80, "clip": (0.85, 1.15)}
 CHALLENGER_PARAMS = {"nl": 10, "mcs": 8, "ff": 0.35, "rl": 0.5, "l1": 0.5,
                      "lr": 0.015, "bf": 0.8, "bfreq": 1}
 INCUMBENT_PARAMS = {"nl": 7, "mcs": 10, "ff": 0.6, "rl": 1, "lr": 0.03}
@@ -88,6 +99,24 @@ def build_cd_k(df, k=1, holiday_dates=None, subcat_map=None):
     cd = _add_subcat_features(df, cd, k, subcat_map)
     cd["ix_wdshare_gap"] = cd["wd_share_roll4"] / (cd["gap_next"] + 1)
     cd["ix_wdlag2_gap"] = cd["wd_lag2"] / (cd["gap_next"] + 1)
+    cd = _add_festival_features(cd, holiday_dates)
+    return cd
+
+
+def _add_festival_features(cd, holiday_dates):
+    """Calendar-derived festival flags (auto_calendar.festival_flags) — a
+    function of the date and the Holiday List alone, so identical at train
+    and score time (plans carry no Festival column). All zero when no
+    holiday calendar is available."""
+    import auto_calendar
+    if holiday_dates is None:
+        for name in FESTIVAL_FEATURES:
+            cd[name] = 0
+        return cd
+    flags = {date: auto_calendar.festival_flags(date, holiday_dates)
+             for date in cd["Date"].unique()}
+    for name in FESTIVAL_FEATURES:
+        cd[name] = cd["Date"].map(lambda d: flags[d][name])
     return cd
 
 
@@ -203,6 +232,10 @@ def load_shadow():
     for name in ["challenger4", "chal4_fb", "fb_point"]:
         out[name] = [lgb.Booster(model_file=str(SHADOW_DIR / f"{name}_s{s}.txt"))
                      for s in meta["seeds"]]
+    for name in ["festival", "fest_fb"]:   # pre-registered July 2026 entrant
+        paths = [SHADOW_DIR / f"{name}_s{s}.txt" for s in meta["seeds"]]
+        out[name] = ([lgb.Booster(model_file=str(p)) for p in paths]
+                     if all(p.exists() for p in paths) else None)
     for q in (10, 75, 90):
         out[f"fb_q{q}"] = lgb.Booster(model_file=str(SHADOW_DIR / f"fb_q{q}.txt"))
     import joblib
@@ -264,6 +297,30 @@ def normalize_plan(plan, holiday_dates):
     return plan
 
 
+def trailing_debias_factor(counter_days, last_history_date, predict_fn):
+    """Level-shift corrector for the official numbers (config in DEBIAS).
+
+    Reconstructs what the current official model predicts for the last N
+    served days (features are truncation-invariant, so this equals what it
+    would have predicted those evenings) and compares with actuals. Applies
+    only when the day-level errors are consistently one-sided — the gate
+    keeps the corrector dormant through ordinary noise and activates it in
+    genuine demand-level shifts (e.g. the 15 Jun 2026 per-head drop).
+    Returns 1.0 whenever the evidence is insufficient."""
+    served = counter_days[counter_days["Date"] <= last_history_date]
+    dates = sorted(served["Date"].unique())[-DEBIAS["window"]:]
+    if len(dates) < DEBIAS["min_days"]:
+        return 1.0
+    rows = served[served["Date"].isin(dates)]
+    daily = (rows.assign(pred=predict_fn(rows))
+             .groupby("Date").agg(actual=("cc", "sum"), pred=("pred", "sum")))
+    over_share = float((daily["pred"] > daily["actual"]).mean())
+    if max(over_share, 1.0 - over_share) < DEBIAS["gate"]:
+        return 1.0
+    factor = daily["actual"].sum() / max(daily["pred"].sum(), 1e-9)
+    return float(np.clip(factor, *DEBIAS["clip"]))
+
+
 def detect_lag_regime(history, plan):
     """'fresh' when the last served day is the working day right before the
     first plan day (yesterday's actuals available), else 'stale'."""
@@ -317,13 +374,27 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
         point = boosters["point"].predict(base_X)
         quantiles = {q: boosters[q].predict(base_X) for q in ("q10", "q75", "q90")}
         cqr, corr = config["cqr_Q80"], config["order_corr"]
+        predict_official = lambda rows: np.clip(  # noqa: E731
+            boosters["point"].predict(design_lgb(rows)), 0, None)
     else:
         meta = shadow_models["meta"]
         point = seed_avg(shadow_models["fb_point"], base_X)
         quantiles = {q: shadow_models[f"fb_{q}"].predict(base_X)
                      for q in ("q10", "q75", "q90")}
         cqr, corr = meta["fb_cqr_Q80"], meta["fb_order_corr"]
+        predict_official = lambda rows: seed_avg(  # noqa: E731
+            shadow_models["fb_point"], design_lgb(rows))
 
+    # level-shift corrector: scales the model outputs, leaves the calibrated
+    # conformal margins (cqr/corr, added below) untouched
+    factor = trailing_debias_factor(counter_days, history["Date"].max(),
+                                    predict_official)
+    point_raw = np.clip(point, 0, None)
+    point = point_raw * factor
+    quantiles = {q: np.clip(v, 0, None) * factor for q, v in quantiles.items()}
+
+    target["pred_raw"] = point_raw.round(0)
+    target["debias_factor"] = factor
     target["predicted"] = np.clip(point, 0, None).round(0)
     target["range_low"] = np.clip(np.clip(quantiles["q10"], 0, None) - cqr, 0, None).round(0)
     target["range_high"] = (np.clip(quantiles["q90"], 0, None) + cqr).round(0)
@@ -341,8 +412,16 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
 
     shadow_preds = {}
     if shadow_models is not None:
+        # raw official goes to the log too: the referee compares models on
+        # their own outputs, the debias layer is scored as official-vs-raw
+        shadow_preds["official_raw"] = point_raw
         entrants = shadow_models["challenger4" if regime == "fresh" else "chal4_fb"]
         shadow_preds["challenger4"] = seed_avg(entrants, c4_X)
+        festival_set = shadow_models.get("festival" if regime == "fresh"
+                                         else "fest_fb")
+        if festival_set is not None:
+            fest_X = design_lgb(target, FESTIVAL_FEATURES)
+            shadow_preds["festival"] = seed_avg(festival_set, fest_X)
         shadow_preds["et"] = np.full(len(target), np.nan)
         shadow_preds["hybrid"] = np.full(len(target), np.nan)
         if regime == "fresh":

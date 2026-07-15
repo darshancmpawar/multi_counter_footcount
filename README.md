@@ -33,7 +33,12 @@ cards, charts, history explorer, model performance pages).
 served day, plan the next day, run the forecast, order the suggested
 quantity. If yesterday's actuals aren't entered yet the app automatically
 switches to a dedicated lag-2 fallback model (silently using stale lags
-would cost ~2.1pt WAPE; the fallback costs ~0.5pt).
+would cost ~2.1pt WAPE; the fallback costs ~0.5pt). When recent demand has
+run consistently above or below the model — a level shift like the −11%
+per-head drop in the 15 Jun 2026 window — a gated trailing corrector scales
+the forecast by the last-10-days actual/predicted ratio (dormant in ordinary
+noise; recovered ~3.3pt WAPE in that shift). It's a bridge between retrains;
+the app flags when it fires.
 
 **Monthly retraining** — the learning curve says every extra month of data
 helps, so retrain monthly:
