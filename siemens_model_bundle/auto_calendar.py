@@ -42,14 +42,91 @@ DAY_TYPE_AFTER_HOLIDAY = "Next Day of Holiday"
 
 
 # ------------------------------------------------------------- day type -----
-def load_holiday_dates(workbook, sheet_name: str = "Holiday List") -> set:
-    """Set of holiday dates from the workbook (path, buffer or ExcelFile).
-    Empty set if the sheet is missing."""
+class HolidayCalendar(set):
+    """A set of facility-closure dates (drop-in for the plain set every
+    caller already uses) that additionally carries:
+      operated       weekday festival dates the facility stayed OPEN on
+                     (Facility Status 'Operated' — e.g. Onam, Kartik Purnima)
+      holiday_types  date -> Holiday Type (Compulsory / Important / Shutdown …)
+    Both feed the festival features; membership (`in`, walks) still means
+    "working day removed", exactly as before."""
+
+    def __init__(self, closed=(), operated=(), holiday_types=None):
+        super().__init__(closed)
+        self.operated = set(operated)
+        self.holiday_types = dict(holiday_types or {})
+
+
+def load_holiday_dates(workbook, sheet_name: str = "Holiday List") -> HolidayCalendar:
+    """Holiday calendar from the workbook (path, buffer or ExcelFile).
+    Empty calendar if the sheet is missing.
+
+    Only closures that remove a working day count as members: rows marked
+    'Operated' in the Facility Status column (the facility stayed open) and
+    holidays falling on weekends (no extra day off) would mislabel adjacent
+    days as holiday-adjacent — validated against the recorded Day Type
+    labels. Operated weekday festivals are kept separately on `.operated`."""
     try:
         holidays = pd.read_excel(workbook, sheet_name=sheet_name)
-        return set(pd.to_datetime(holidays["Date"]).dt.date)
-    except Exception:
-        return set()
+    except ValueError:          # sheet genuinely absent — documented fallback
+        return HolidayCalendar()
+    except Exception as error:  # corrupt file, renamed columns, engine issues
+        import warnings
+        warnings.warn(f"Holiday List sheet could not be read ({error!r}) — "
+                      "every day will derive as Regular and holiday-adjacent "
+                      "forecasts will be wrong until this is fixed")
+        return HolidayCalendar()
+    try:
+        dates = pd.to_datetime(holidays["Date"])
+        weekday = dates.dt.weekday < 5
+        operated = pd.Series(False, index=holidays.index)
+        if "Facility Status" in holidays.columns:
+            status = holidays["Facility Status"].astype(str).str.strip().str.lower()
+            operated = status == "operated"
+        types = (holidays["Holiday Type"].astype(str)
+                 if "Holiday Type" in holidays.columns
+                 else pd.Series("", index=holidays.index))
+        return HolidayCalendar(
+            closed=dates[weekday & ~operated].dt.date,
+            operated=dates[weekday & operated].dt.date,
+            holiday_types=dict(zip(dates.dt.date, types)))
+    except Exception as error:
+        import warnings
+        warnings.warn(f"Holiday List sheet is malformed ({error!r}) — "
+                      "every day will derive as Regular until this is fixed")
+        return HolidayCalendar()
+
+
+def festival_flags(date, holiday_dates) -> dict:
+    """Calendar-known festival features for one date (leakage-safe: derived
+    from the date and the Holiday List alone, never from recorded data).
+
+    fest_op_today        an operated festival falls on the day itself
+    adj_hol_important/compulsory/shutdown
+                         Holiday Type(s) of the closure(s) in the adjacent
+                         non-working blocks — splits the single holiday-
+                         adjacent flag by expected attendance impact
+                         (religious/travel vs national vs shutdown/event)
+    fest_any             any of the above"""
+    date = pd.Timestamp(date).date()
+    operated = getattr(holiday_dates, "operated", set())
+    types_of = getattr(holiday_dates, "holiday_types", {})
+    adjacent_types = set()
+    for step in (+1, -1):
+        day = date + timedelta(days=step)
+        while day.weekday() >= 5 or day in holiday_dates:
+            if day in holiday_dates:
+                adjacent_types.add(types_of.get(day, ""))
+            day += timedelta(days=step)
+    flags = {
+        "fest_op_today": int(date in operated),
+        "adj_hol_important": int("Important" in adjacent_types),
+        "adj_hol_compulsory": int("Compulsory" in adjacent_types),
+        "adj_hol_shutdown": int(bool(adjacent_types
+                                     & {"Shutdown", "Event", "Observed"})),
+    }
+    flags["fest_any"] = int(any(flags.values()) or bool(adjacent_types))
+    return flags
 
 
 def derive_day_type(date, holiday_dates: set) -> str:

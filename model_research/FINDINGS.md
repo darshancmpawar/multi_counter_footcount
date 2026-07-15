@@ -270,3 +270,162 @@ Head-word frozen-mapping subcat enters July as part of the corrected
 August only on the shadow verdict with a bootstrap CI that excludes zero —
 same rule as everything else. Curated-column subcat: parked (do-not-add
 ledger), retest at higher n.
+
+---
+
+# Model improvement research — August 2026 round (post-July-forward-test)
+
+Trigger: history extended to **9 Jul 2026** (19 new working days, 15 Jun –
+9 Jul; the workbook now also carries a `Festival` column and a Holiday List
+`Facility Status`/`Holiday Type` schema). Two questions: how is the frozen
+model doing on genuinely unseen data, and can the new columns help?
+
+## The July forward test — the model degraded, and the cause is in the data
+
+Frozen incumbent, scored one-day-ahead exactly as the June report:
+
+| Window | n | Counter WAPE | Day WAPE | Bias | Over% |
+|---|---|---|---|---|---|
+| June report (recap) | 30 | 6.07 | 3.54 | −4.7 | 50 |
+| **15 Jun – 9 Jul (new)** | 57 | **11.45** | **9.95** | **+53.6** | **86** |
+| — Jun 15–30 | 36 | 10.67 | 9.10 | +49.2 | |
+| — Jul 1–9 | 21 | 12.80 | 11.43 | +61.2 | |
+
+The error is one-sided (86% over-predictions, +54 plates/counter-day). Running
+the pre-registered diagnosis ladder (HANDOFF §10: bias sign first) → a genuine
+**demand level shift**: consumption per head dropped ~0.84 → ~0.73–0.75 (−11–13%)
+starting the week of 15 Jun, while headcount *rose* +4.6%. People are in the
+building but eating at these counters less — an external regime change, not a
+model defect. Every weekday is down 5–12%.
+
+Retraining does **not** fix it (the shift is inside the window, unseen at
+train time): a policy-simulated retrain @12 Jun then @30 Jun scores 11.54%
+counter / 8.95% day — statistically tied with frozen (bootstrap +0.09,
+CI [−0.75, +0.92]). Guardrails held: P10–P90 coverage stayed 89% and the
+P90+CQR order policy had **0 shortfall days** — the bias surfaced as
+over-provision (waste), not shortage. Shadow roster on the window (all
+ambiguous vs frozen, CIs include zero): challenger4 10.75, ExtraTrees 10.49,
+hybrid 11.19.
+
+## Change 1 — trailing level-shift corrector (adopted, gated, CV-neutral)
+
+A multiplicative debias on the official point + quantiles: compare the model's
+own predictions on the last N served days with actuals, scale by the trailing
+actual/pred ratio. The design question was **how to help in a shift without
+hurting in stable noise**. Swept post-hoc on stored predictions across the 4
+stable CV folds (must stay neutral) and the shifted July/June windows (must
+help):
+
+| Config | CV mean | CV worst Δ | Jul(base) | Jul(fest) | Frozen 15Jun–9Jul |
+|---|---|---|---|---|---|
+| raw (no debias) | 12.15 | — | 12.18 | 10.92 | 11.45 |
+| N=7 pooled, always-on | 12.33 | +0.65 | 9.16 | 8.61 | 8.35 |
+| N=5 per-counter, always-on | 12.97 | +1.5 | 7.47 | 6.79 | 8.20 |
+| **N=10 pooled, gate 80%** | **12.12** | **+0.18** | 9.16 | 8.61 | **8.15** |
+
+Two design findings from iterating:
+1. **Always-on hurts stable regimes** (+0.65pt CV worst fold); a **sign-gate**
+   — apply only when ≥80% of the trailing days' *day-level* errors share one
+   sign — makes it dormant in noise (fires 2–5/40 stable days at factors within
+   ±6%) yet fully active in the shift (fires 15/19 frozen-window days at
+   0.89–0.95). Net CV effect ≈ 0.
+2. **Per-counter factors chase counter-level noise** (worst CV fold +1.5pt)
+   despite a better shifted-window number — rejected on the same
+   robustness-over-peak-performance principle the repo already applies to
+   target encodings. **Pooled day-level factor** is the honest choice.
+
+Adopted: `DEBIAS = {window 10, min_days 5, gate 0.80, clip ±15%}` in
+`shadow.py`; recovers **11.45 → 8.15** counter WAPE (bias +54 → +9) on the
+shifted window, ~0 effect on stable data. Conformal margins are left untouched
+(the corrector scales the model output; the calibrated ±cqr / +corr are added
+after). The raw forecast is logged alongside (`pred_official_raw`) so the
+month-end referee scores the corrector as official-vs-raw. The MVP UI surfaces
+a banner whenever the factor departs from 1.0. **This is a bridge, not a cure**
+— the fix is a retrain once the new level is represented, plus a leakage-safe
+attendance signal.
+
+## Change 2 — festival features, pre-registered as a shadow entrant
+
+The `Festival` column is 21/23 days redundant with the existing holiday-
+adjacency flag (only Onam and Kartik Purnima are festivals on open days,
+effect −2% / −6%, n=2). Its genuinely new signal is **severity**: the model
+has one `dt_prev/next_holiday` flag for effects ranging −74% (pre-Christmas
+shutdown) to −3% (Republic Day). Five leakage-safe flags derived from the
+**Holiday List sheet** (not the `Festival` column — plans carry no Festival
+column, so features must come from calendar data available at score time):
+`fest_any`, `fest_op_today`, `adj_hol_{important,compulsory,shutdown}`.
+
+Evidence under the repo's protocol:
+
+| Test | Baseline | + Festival |
+|---|---|---|
+| 4-fold expanding CV (Jan–May, selection) | 12.15 | 12.18 (no gain) |
+| Jul 1–9 one-shot (mean of 8 seed-triples) | 12.02 ±0.19 | **11.10 ±0.13** |
+| Jul 1–9 paired bootstrap | — | **−1.26, CI [−1.96, −0.43]** |
+
+The July gain is **indirect** — no festival fell in Jul 1–9; the flags absorb
+the extreme festival days in *training*, cleaning up how correlated features
+(panchangam, lags) are used on ordinary days. But CV over Jan–May shows nothing,
+21 rows is below the repo's evidence bar, and the trailing-2-month validation
+window used at build time (May 10 – Jul 9, festival-sparse) shows base=festival
+to two decimals — this window simply can't discriminate the effect. **Not
+adopted; pre-registered as a shadow entrant** (`festival_s*` + lag-2
+`fest_fb_s*` in `artifacts_shadow`, incumbent architecture + the 5 flags,
+built on history through 9 Jul, frozen official model untouched). The
+decisive test is **mid-August onward** — Independence Day, Ganesh Chaturthi,
+Dasara, Diwali — when the flags actually activate and n is large enough.
+Adoption rule unchanged: fold into a retrain only if the shadow month's
+bootstrap CI vs official excludes zero.
+
+Honest confound noted in the build script: the entrant has ~2 more months of
+data than the frozen official, so festival-vs-official conflates "festival
+features help" with "more data helps". The clean adjudicator is the
+identical-snapshot base-vs-festival A/B (the table above), re-run at August
+scale — `model_research/add_festival_entrant.py` records both the entrant and
+its matched baseline WAPE for exactly this reason.
+
+## Disposition
+
+- **Deploy the debias corrector now** (it is in the official scoring path,
+  gated and CV-neutral). Retrain monthly regardless; the corrector is a bridge
+  between retrains and an early-warning signal for regime change.
+- **Festival entrant runs in shadow**; adjudicate on the August festival month.
+- **Still the biggest levers** (unchanged from the July FINDINGS): more history,
+  and a leakage-safe day-ahead attendance/headcount signal — the −11% per-head
+  drop is exactly the variance an attendance feature would capture.
+
+---
+
+# Audit round — August 2026 (root cause + production hardening)
+
+A full adversarial audit (code / data / features / decisions) answered the
+open question from the forward test: **why did demand shift on 15 Jun?**
+
+**Root cause (from the never-read workbook sheets + kiosk orderlog):** a
+menu/caterer overhaul landed exactly at the shift date. Considerations G6
+documents 54 brand-new dishes in the 15 Jun – 9 Jul window (new-item share of
+the daily menu 9.8% → 15.2%); the orderlog's vendor column shows the two
+dominant caterers exiting by May 2026 with replacements ramping Apr–May, plus
+lunch price creep. The per-head drop is largest on the counter that received
+the most new dishes (North Veg −17%). Also material: **the true propensity
+drop is −13.8%, not −9%** — Apr 13/20/24 and Jul 1/2/3/6 have circularly
+imputed headcount (Considerations D1/G4) that makes those days look normal by
+construction (now masked via `shadow.IMPUTED_HEADCOUNT_DATES`). This is why
+festival/panchangam features and one retrain couldn't fix the error: the miss
+is a behavioral propensity shift, not a calendar effect, and 3.5 weeks of new
+level dilutes into 11 months of history.
+
+Production defects found, verified and fixed (details in git log +
+`model_research/IMPROVEMENT_PLAN.md`): requirements.txt missing
+sklearn/joblib/pyarrow (the cause of the silently-dead ET/KNN entrants);
+predict.py was a divergent second scoring path quoting ~9% higher orders than
+the app; day-after-holiday plans were misrouted to the lag-2 fallback; four
+classes of silent exception swallowing; five copies of wape(); dead
+functions/artifacts/one-off scripts removed; boosters now cached per process;
+13 fast unit tests added around the decision logic.
+
+Open with the client: obtain orderlog_2026_06/07.csv (kiosk export ends
+25 May — it misses the shift window entirely), Raw_Data.xlsx (Summary Report
+incident log, covers to 2 Jul), and sign-off on the 47 unapproved New Items
+Review rows. Next: the error-reduction experiment matrix in
+IMPROVEMENT_PLAN.md item 4 — menu-novelty features (root-cause aligned) first.

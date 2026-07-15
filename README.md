@@ -33,7 +33,12 @@ cards, charts, history explorer, model performance pages).
 served day, plan the next day, run the forecast, order the suggested
 quantity. If yesterday's actuals aren't entered yet the app automatically
 switches to a dedicated lag-2 fallback model (silently using stale lags
-would cost ~2.1pt WAPE; the fallback costs ~0.5pt).
+would cost ~2.1pt WAPE; the fallback costs ~0.5pt). When recent demand has
+run consistently above or below the model — a level shift like the −11%
+per-head drop in the 15 Jun 2026 window — a gated trailing corrector scales
+the forecast by the last-10-days actual/predicted ratio (dormant in ordinary
+noise; recovered ~3.3pt WAPE in that shift). It's a bridge between retrains;
+the app flags when it fires.
 
 **Monthly retraining** — the learning curve says every extra month of data
 helps, so retrain monthly:
@@ -65,7 +70,7 @@ retrain.py                    monthly retraining pipeline (train → report → 
 shadow_run.py                 evening shadow scoring CLI (same log as the app)
 tests/test_leakage.py         truncation-invariance gate (also runs in every retrain)
 requirements.txt
-Lunch_Master_Data_FINAL(cleaned).xlsx   history workbook (Aug 2025 – Jun 2026)
+Lunch_Master_Data_FINAL(cleaned).xlsx   history workbook (Aug 2025 – Jul 2026)
 HANDOFF.md                    full modelling handoff / methodology
 
 ui/                           Streamlit frontend package
@@ -78,7 +83,7 @@ ui/                           Streamlit frontend package
 
 siemens_model_bundle/         the model itself
   features.py                 leakage-safe feature builder (frozen, audited)
-  predict.py                  CLI scorer (frozen)
+  predict.py                  CLI over the production scoring path (score_plan)
   evaluate.py                 metric harness (frozen)
   shadow.py                   k-shift feature builder + shadow/fallback loading
   auto_calendar.py            Day Type (holiday list) + Panchangam (ephem) derivation
@@ -89,8 +94,9 @@ siemens_model_bundle/         the model itself
 
 model_research/               evidence behind every modelling decision
   FINDINGS.md                 research log: CV results, noise floor, sweeps
+  IMPROVEMENT_PLAN.md         August 2026 audit checklist (root cause + fixes)
   harness.py                  expanding-window CV harness
-  build_shadow_bundle.py      one-off builder for the current shadow set
+  add_festival_entrant.py     pre-registers the festival shadow entrant
   validate_auto_calendar.py   checks the calendar derivation against recorded labels
   shadow_eval.py              month-end shadow comparison
   retrain_reports/            one report per retraining run

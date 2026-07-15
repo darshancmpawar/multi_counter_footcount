@@ -37,20 +37,6 @@ def load_holiday_dates(uploaded_bytes: bytes | None) -> set:
     return auto_calendar.load_holiday_dates(source)
 
 
-@st.cache_resource(show_spinner="Loading frozen model bundle…")
-def load_incumbent_models():
-    """The frozen, June-anchored production boosters + conformal config."""
-    import shadow
-    return shadow.load_incumbent()
-
-
-@st.cache_resource(show_spinner=False)
-def load_shadow_models():
-    """Challenger / blend / lag-2 fallback set (None if never built)."""
-    import shadow
-    return shadow.load_shadow()
-
-
 @st.cache_data(show_spinner=False)
 def counter_day_history(history: pd.DataFrame) -> pd.DataFrame:
     """Item-level history aggregated to one row per Date + Counter."""

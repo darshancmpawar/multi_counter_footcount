@@ -41,6 +41,13 @@ def render_forecast_warnings(forecast: pd.DataFrame) -> None:
                    "earlier days' actuals and are less reliable. For best "
                    "accuracy forecast one day at a time with updated history.",
                    icon="📅")
+    factor = forecast["debias_factor"].iloc[0] if "debias_factor" in forecast else 1.0
+    if abs(factor - 1.0) > 1e-6:
+        direction = "down" if factor < 1 else "up"
+        st.warning(f"Recent demand has run consistently {'below' if factor < 1 else 'above'} "
+                   f"the model — applying a **{abs(factor - 1) * 100:.0f}% {direction}ward "
+                   "level-shift correction** from the last 10 served days. Retrain "
+                   "when convenient to fold the new level into the model.", icon="📉")
 
 
 def render_forecast_numbers(forecast: pd.DataFrame) -> None:

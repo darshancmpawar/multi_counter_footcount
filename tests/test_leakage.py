@@ -15,10 +15,11 @@ sys.path.insert(0, str(REPO_ROOT / "siemens_model_bundle"))
 
 import auto_calendar  # noqa: E402
 from features import NUM_FEATURES  # noqa: E402
-from shadow import CHALLENGER4_FEATURES, build_cd_k, freeze_headword_map  # noqa: E402
+from shadow import (CHALLENGER4_FEATURES, FESTIVAL_FEATURES,  # noqa: E402
+                    build_cd_k, freeze_headword_map)
 
 WORKBOOK = REPO_ROOT / "Lunch_Master_Data_FINAL(cleaned).xlsx"
-ALL_FEATURES = list(NUM_FEATURES) + CHALLENGER4_FEATURES
+ALL_FEATURES = list(NUM_FEATURES) + CHALLENGER4_FEATURES + FESTIVAL_FEATURES
 
 
 def _columns_equal(a: pd.Series, b: pd.Series) -> bool:
@@ -56,6 +57,11 @@ def run_leakage_test(history: pd.DataFrame | None = None, verbose: bool = True) 
                 print(f"  k={k} cut={pd.Timestamp(cut).date()}: {status}")
             passed &= not leaking
     return passed
+
+
+def test_leakage():
+    """Pytest entry point — the gate itself (slow: full feature rebuilds)."""
+    assert run_leakage_test(verbose=False)
 
 
 if __name__ == "__main__":

@@ -3,27 +3,24 @@ Anchors to the bundle's exact feature builder and metric so results are
 comparable with the frozen incumbent (val 9.10 / June 6.06 WAPE)."""
 import sys
 import warnings
+from pathlib import Path
 
 warnings.filterwarnings("ignore")
-sys.path.insert(0, "/home/user/multi_counter_footcount/siemens_model_bundle")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "siemens_model_bundle"))
 
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
 
+from evaluate import wape  # noqa: F401  (canonical metric, re-exported)
 from features import build_all, NUM_FEATURES, CAT_FEATURES
+from shadow import CAT_LEVELS  # single source for categorical levels
 
-HIST = "/home/user/multi_counter_footcount/Lunch_Master_Data_FINAL(cleaned).xlsx"
-CAT_LEVELS = {"Counter Name": ["North Non Veg", "North Veg", "South Non Veg", "South Veg"],
-              "weekday": ["Friday", "Monday", "Thursday", "Tuesday", "Wednesday"]}
+HIST = str(REPO_ROOT / "Lunch_Master_Data_FINAL(cleaned).xlsx")
 
 TRAIN_END = pd.Timestamp("2026-03-31")
 VAL_END = pd.Timestamp("2026-05-31")   # June 1-12 = locked test, touch ONCE at the end
-
-
-def wape(y, p):
-    y, p = np.asarray(y, float), np.asarray(p, float)
-    return 100 * np.abs(p - y).sum() / y.sum()
 
 
 _cd_cache = {}

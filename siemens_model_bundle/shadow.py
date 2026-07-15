@@ -29,6 +29,26 @@ SUBCAT_FEATURES = ["sc_pop_mean", "sc_pop_max", "sc_rel_pop", "sc_dsl_mean",
                    "sc_repeat2", "sc_novel14", "n_subcats"]
 INTERACTION_FEATURES = ["ix_wdshare_gap", "ix_wdlag2_gap"]
 CHALLENGER4_FEATURES = EXTRA_FEATURES + SUBCAT_FEATURES + INTERACTION_FEATURES
+# calendar-known festival/holiday-severity flags (auto_calendar.festival_flags)
+# — pre-registered "festival" shadow entrant = incumbent features + these
+FESTIVAL_FEATURES = ["fest_any", "fest_op_today", "adj_hol_important",
+                     "adj_hol_compulsory", "adj_hol_shutdown"]
+
+# Trailing level-shift corrector for the OFFICIAL numbers (July 2026 round):
+# if >=80% of the last 10 served days erred in the same direction at day
+# level, scale the forecast by the trailing actual/predicted ratio (max
+# +/-15%). Gate keeps it dormant in stable regimes (CV-neutral); in the
+# June-July 2026 demand shift it recovered ~3.3pt counter WAPE.
+DEBIAS = {"window": 10, "min_days": 5, "gate": 0.80, "clip": (0.85, 1.15)}
+
+# Dates whose Headcount is IMPUTED as TLC / weekday-median(TLC/HC)
+# (workbook Considerations D1 + G4). Their plates-per-head is circular —
+# it equals the historical ratio by construction — so they must be masked
+# out of any propensity estimation, drift monitoring or per-head features.
+IMPUTED_HEADCOUNT_DATES = frozenset(pd.Timestamp(d).date() for d in (
+    "2026-04-13", "2026-04-20", "2026-04-24",           # D1
+    "2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06",  # G4
+))
 CHALLENGER_PARAMS = {"nl": 10, "mcs": 8, "ff": 0.35, "rl": 0.5, "l1": 0.5,
                      "lr": 0.015, "bf": 0.8, "bfreq": 1}
 INCUMBENT_PARAMS = {"nl": 7, "mcs": 10, "ff": 0.6, "rl": 1, "lr": 0.03}
@@ -88,6 +108,24 @@ def build_cd_k(df, k=1, holiday_dates=None, subcat_map=None):
     cd = _add_subcat_features(df, cd, k, subcat_map)
     cd["ix_wdshare_gap"] = cd["wd_share_roll4"] / (cd["gap_next"] + 1)
     cd["ix_wdlag2_gap"] = cd["wd_lag2"] / (cd["gap_next"] + 1)
+    cd = _add_festival_features(cd, holiday_dates)
+    return cd
+
+
+def _add_festival_features(cd, holiday_dates):
+    """Calendar-derived festival flags (auto_calendar.festival_flags) — a
+    function of the date and the Holiday List alone, so identical at train
+    and score time (plans carry no Festival column). All zero when no
+    holiday calendar is available."""
+    import auto_calendar
+    if holiday_dates is None:
+        for name in FESTIVAL_FEATURES:
+            cd[name] = 0
+        return cd
+    flags = {date: auto_calendar.festival_flags(date, holiday_dates)
+             for date in cd["Date"].unique()}
+    for name in FESTIVAL_FEATURES:
+        cd[name] = cd["Date"].map(lambda d: flags[d][name])
     return cd
 
 
@@ -192,37 +230,67 @@ def design_sk(cd, med=None, cols=None):
     return X.fillna(med), med, X.columns
 
 
+_MODEL_CACHE = {}   # process-lifetime cache; restart (or clear) after a promote
+
+
+def clear_model_cache():
+    _MODEL_CACHE.clear()
+
+
 def load_shadow():
-    """Load all shadow/fallback artifacts (None if not built)."""
+    """Load all shadow/fallback artifacts (None if not built). Cached for
+    the process lifetime — score_plan runs on every forecast and must not
+    re-read a dozen boosters from disk each time."""
     import json
     import lightgbm as lgb
+    if "shadow" in _MODEL_CACHE:
+        return _MODEL_CACHE["shadow"]
     if not (SHADOW_DIR / "meta.json").exists():
-        return None
+        return None   # not cached: the bundle may be built later in-process
     meta = json.load(open(SHADOW_DIR / "meta.json"))
     out = {"meta": meta}
     for name in ["challenger4", "chal4_fb", "fb_point"]:
         out[name] = [lgb.Booster(model_file=str(SHADOW_DIR / f"{name}_s{s}.txt"))
                      for s in meta["seeds"]]
+    for name in ["festival", "fest_fb"]:   # pre-registered July 2026 entrant
+        paths = [SHADOW_DIR / f"{name}_s{s}.txt" for s in meta["seeds"]]
+        out[name] = ([lgb.Booster(model_file=str(p)) for p in paths]
+                     if all(p.exists() for p in paths) else None)
     for q in (10, 75, 90):
         out[f"fb_q{q}"] = lgb.Booster(model_file=str(SHADOW_DIR / f"fb_q{q}.txt"))
     import joblib
+    import warnings
     for name in ("et_tuned", "knn"):
-        try:
-            out[name] = joblib.load(SHADOW_DIR / f"{name}.joblib")
-        except Exception:
+        path = SHADOW_DIR / f"{name}.joblib"
+        if not path.exists():
             out[name] = None
+            continue
+        try:
+            out[name] = joblib.load(path)
+        except Exception as error:
+            # a present-but-unloadable entrant must be LOUD: this exact
+            # failure (missing pyarrow) silently dropped et/knn from the
+            # month-end referee for weeks
+            warnings.warn(f"shadow entrant '{name}' exists but failed to "
+                          f"load ({error!r}) — it will log NaN and be "
+                          f"missing from the month-end adjudication")
+            out[name] = None
+    _MODEL_CACHE["shadow"] = out
     return out
 
 
 def load_incumbent():
-    """The frozen production boosters + conformal config."""
+    """The deployed production boosters + conformal config (cached)."""
     import pickle
     import lightgbm as lgb
+    if "incumbent" in _MODEL_CACHE:
+        return _MODEL_CACHE["incumbent"]
     artifacts = BUNDLE_DIR / "artifacts"
     with open(artifacts / "final_config.pkl", "rb") as f:
         config = pickle.load(f)
     boosters = {name: lgb.Booster(model_file=str(artifacts / f"model_{name}.txt"))
                 for name in ("point", "q10", "q75", "q90")}
+    _MODEL_CACHE["incumbent"] = (boosters, config)
     return boosters, config
 
 
@@ -264,11 +332,41 @@ def normalize_plan(plan, holiday_dates):
     return plan
 
 
-def detect_lag_regime(history, plan):
-    """'fresh' when the last served day is the working day right before the
-    first plan day (yesterday's actuals available), else 'stale'."""
+def trailing_debias_factor(counter_days, last_history_date, predict_fn):
+    """Level-shift corrector for the official numbers (config in DEBIAS).
+
+    Reconstructs what the current official model predicts for the last N
+    served days (features are truncation-invariant, so this equals what it
+    would have predicted those evenings) and compares with actuals. Applies
+    only when the day-level errors are consistently one-sided — the gate
+    keeps the corrector dormant through ordinary noise and activates it in
+    genuine demand-level shifts (e.g. the 15 Jun 2026 per-head drop).
+    Returns 1.0 whenever the evidence is insufficient."""
+    served = counter_days[counter_days["Date"] <= last_history_date]
+    dates = sorted(served["Date"].unique())[-DEBIAS["window"]:]
+    if len(dates) < DEBIAS["min_days"]:
+        return 1.0
+    rows = served[served["Date"].isin(dates)]
+    daily = (rows.assign(pred=predict_fn(rows))
+             .groupby("Date").agg(actual=("cc", "sum"), pred=("pred", "sum")))
+    over_share = float((daily["pred"] > daily["actual"]).mean())
+    if max(over_share, 1.0 - over_share) < DEBIAS["gate"]:
+        return 1.0
+    factor = daily["actual"].sum() / max(daily["pred"].sum(), 1e-9)
+    return float(np.clip(factor, *DEBIAS["clip"]))
+
+
+def detect_lag_regime(history, plan, holiday_dates=None):
+    """'fresh' when the last served day is the WORKING day right before the
+    first plan day (yesterday's actuals available), else 'stale'.
+
+    Holiday-aware: without the holiday calendar, the first working day after
+    a mid-week holiday counts a busday gap of 2 and is misrouted to the
+    lag-2 fallback even though the last working day's actuals are current."""
+    holidays = sorted(pd.Timestamp(d).date() for d in (holiday_dates or ()))
     gap = int(np.busday_count(history["Date"].max().date(),
-                              pd.to_datetime(plan["Date"]).min().date()))
+                              pd.to_datetime(plan["Date"]).min().date(),
+                              holidays=holidays))
     return "fresh" if gap <= 1 else "stale"
 
 
@@ -294,10 +392,20 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
     frame with official columns plus a dict of shadow prediction arrays."""
     plan = normalize_plan(plan, holiday_dates)
     plan = _subcat_for_plan(history, plan)
-    regime = detect_lag_regime(history, plan)
+    # reference-only columns the workbook has but a plan never will
+    # (e.g. Festival) — NaN-fill so plan[history.columns] can't KeyError
+    for column in history.columns.difference(plan.columns):
+        plan[column] = np.nan
+    regime = detect_lag_regime(history, plan, holiday_dates)
     lag_depth = 1 if regime == "fresh" else 2
 
     shadow_models = load_shadow()
+    if regime == "stale" and shadow_models is None:
+        raise RuntimeError(
+            "Yesterday's actuals are missing (stale regime) and the lag-2 "
+            "fallback set is not built — run retrain.py to build "
+            "artifacts_shadow/, or update the history workbook through the "
+            "last served day.")
     subcat_map = (shadow_models["meta"].get("subcat_map")
                   if shadow_models is not None else None)
     combined = pd.concat([history, plan[history.columns]], ignore_index=True)
@@ -313,13 +421,27 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
         point = boosters["point"].predict(base_X)
         quantiles = {q: boosters[q].predict(base_X) for q in ("q10", "q75", "q90")}
         cqr, corr = config["cqr_Q80"], config["order_corr"]
+        predict_official = lambda rows: np.clip(  # noqa: E731
+            boosters["point"].predict(design_lgb(rows)), 0, None)
     else:
         meta = shadow_models["meta"]
         point = seed_avg(shadow_models["fb_point"], base_X)
         quantiles = {q: shadow_models[f"fb_{q}"].predict(base_X)
                      for q in ("q10", "q75", "q90")}
         cqr, corr = meta["fb_cqr_Q80"], meta["fb_order_corr"]
+        predict_official = lambda rows: seed_avg(  # noqa: E731
+            shadow_models["fb_point"], design_lgb(rows))
 
+    # level-shift corrector: scales the model outputs, leaves the calibrated
+    # conformal margins (cqr/corr, added below) untouched
+    factor = trailing_debias_factor(counter_days, history["Date"].max(),
+                                    predict_official)
+    point_raw = np.clip(point, 0, None)
+    point = point_raw * factor
+    quantiles = {q: np.clip(v, 0, None) * factor for q, v in quantiles.items()}
+
+    target["pred_raw"] = point_raw.round(0)
+    target["debias_factor"] = factor
     target["predicted"] = np.clip(point, 0, None).round(0)
     target["range_low"] = np.clip(np.clip(quantiles["q10"], 0, None) - cqr, 0, None).round(0)
     target["range_high"] = (np.clip(quantiles["q90"], 0, None) + cqr).round(0)
@@ -337,8 +459,16 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
 
     shadow_preds = {}
     if shadow_models is not None:
+        # raw official goes to the log too: the referee compares models on
+        # their own outputs, the debias layer is scored as official-vs-raw
+        shadow_preds["official_raw"] = point_raw
         entrants = shadow_models["challenger4" if regime == "fresh" else "chal4_fb"]
         shadow_preds["challenger4"] = seed_avg(entrants, c4_X)
+        festival_set = shadow_models.get("festival" if regime == "fresh"
+                                         else "fest_fb")
+        if festival_set is not None:
+            fest_X = design_lgb(target, FESTIVAL_FEATURES)
+            shadow_preds["festival"] = seed_avg(festival_set, fest_X)
         shadow_preds["et"] = np.full(len(target), np.nan)
         shadow_preds["hybrid"] = np.full(len(target), np.nan)
         if regime == "fresh":

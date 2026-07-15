@@ -40,9 +40,10 @@ BUNDLE_DIR = REPO_ROOT / "siemens_model_bundle"
 sys.path.insert(0, str(BUNDLE_DIR))
 
 import auto_calendar  # noqa: E402
+from evaluate import wape  # noqa: E402
 from shadow import (CHALLENGER4_FEATURES, CHALLENGER_PARAMS,  # noqa: E402
-                    INCUMBENT_PARAMS, build_cd_k, design_lgb, design_sk,
-                    freeze_headword_map)
+                    FESTIVAL_FEATURES, INCUMBENT_PARAMS, build_cd_k,
+                    design_lgb, design_sk, freeze_headword_map)
 sys.path.insert(0, str(REPO_ROOT))
 from tests.test_leakage import run_leakage_test  # noqa: E402
 
@@ -51,11 +52,6 @@ QUANTILES = (0.10, 0.75, 0.90)
 SEEDS = (1, 42, 99)
 INTERVAL_COVERAGE = 0.80    # nominal coverage of the P10-P90 band
 ORDER_SERVICE_LEVEL = 0.75  # service level of the suggested-order quantile
-
-
-def wape(actual, predicted) -> float:
-    actual, predicted = np.asarray(actual, float), np.asarray(predicted, float)
-    return float(100 * np.abs(predicted - actual).sum() / actual.sum())
 
 
 def lgb_params(config: dict, objective: str = "poisson", seed: int = 42,
@@ -146,9 +142,13 @@ def train_official_set(trainer: ModelTrainer, output_dir: Path) -> dict:
 
 
 def train_shadow_set(fresh: ModelTrainer, stale: ModelTrainer,
-                     output_dir: Path) -> dict:
+                     output_dir: Path, subcat_map: dict) -> dict:
     """Shadow roster (challenger4, tuned ExtraTrees, KNN for the hybrid) and
-    the lag-2 fallback set, saved with the names shadow.load_shadow expects."""
+    the lag-2 fallback set, saved with the names shadow.load_shadow expects.
+
+    subcat_map is the frozen item->subcat mapping built from item-level
+    history in main() (freeze_headword_map needs item rows; fresh.full is at
+    counter-day grain), stored verbatim in meta.json for identical scoring."""
     from sklearn.ensemble import ExtraTreesRegressor
     from sklearn.neighbors import KNeighborsRegressor
     from sklearn.preprocessing import StandardScaler
@@ -156,9 +156,10 @@ def train_shadow_set(fresh: ModelTrainer, stale: ModelTrainer,
     meta = {"built_on": str(fresh.full["Date"].max().date()),
             "challenger4_features": CHALLENGER4_FEATURES,
             "challenger_params": CHALLENGER_PARAMS,
+            "festival_features": FESTIVAL_FEATURES,
             "incumbent_params": INCUMBENT_PARAMS,
             "hybrid_lgb_weight": 0.65,
-            "subcat_map": freeze_headword_map(fresh.full),
+            "subcat_map": subcat_map,
             "seeds": list(SEEDS), "n_iters": {}}
     scores = {}
 
@@ -168,6 +169,19 @@ def train_shadow_set(fresh: ModelTrainer, stale: ModelTrainer,
         booster.save_model(str(output_dir / f"challenger4_s{seed}.txt"))
         meta["n_iters"][f"challenger4_s{seed}"] = iters[seed]
     scores["challenger_val_wape"] = wape(fresh.val["cc"], challenger_val)
+
+    festivals, festival_val, festival_iters = fresh.fit_seed_averaged(
+        INCUMBENT_PARAMS, FESTIVAL_FEATURES)
+    for seed, booster in zip(SEEDS, festivals):
+        booster.save_model(str(output_dir / f"festival_s{seed}.txt"))
+        meta["n_iters"][f"festival_s{seed}"] = festival_iters[seed]
+    scores["festival_val_wape"] = wape(fresh.val["cc"], festival_val)
+
+    festival_fallbacks, _, ffb_iters = stale.fit_seed_averaged(
+        INCUMBENT_PARAMS, FESTIVAL_FEATURES)
+    for seed, booster in zip(SEEDS, festival_fallbacks):
+        booster.save_model(str(output_dir / f"fest_fb_s{seed}.txt"))
+        meta["n_iters"][f"fest_fb_s{seed}"] = ffb_iters[seed]
 
     features_full, medians, columns = design_sk(fresh.full)
     features_train, _, _ = design_sk(fresh.train, medians, columns)
@@ -241,6 +255,7 @@ def write_report(path: Path, context: dict) -> None:
         "|---|---|",
         f"| Official point (incumbent architecture) | {context['official']['val_wape']:.2f} |",
         f"| Challenger4 (3-seed) | {context['shadow']['challenger_val_wape']:.2f} |",
+        f"| Festival entrant (3-seed) | {context['shadow']['festival_val_wape']:.2f} |",
         f"| Tuned ExtraTrees | {context['shadow']['et_val_wape']:.2f} |",
         f"| Lag-2 fallback point | {context['shadow']['fallback_val_wape']:.2f} |",
         f"| Seasonal baseline (wd_roll4) | {context['baseline_val_wape']:.2f} |",
@@ -324,7 +339,7 @@ def main() -> None:
     print("Training official set (point + quantiles + conformal)…")
     official_scores = train_official_set(fresh, output_dir)
     print("Training shadow set (challenger, blend, lag-2 fallbacks)…")
-    shadow_scores = train_shadow_set(fresh, stale, output_dir)
+    shadow_scores = train_shadow_set(fresh, stale, output_dir, subcat_map)
     with open(output_dir / "meta.json") as f:
         shadow_meta = json.load(f)
 
