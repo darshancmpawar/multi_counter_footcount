@@ -68,6 +68,15 @@ def load_holiday_dates(workbook, sheet_name: str = "Holiday List") -> HolidayCal
     labels. Operated weekday festivals are kept separately on `.operated`."""
     try:
         holidays = pd.read_excel(workbook, sheet_name=sheet_name)
+    except ValueError:          # sheet genuinely absent — documented fallback
+        return HolidayCalendar()
+    except Exception as error:  # corrupt file, renamed columns, engine issues
+        import warnings
+        warnings.warn(f"Holiday List sheet could not be read ({error!r}) — "
+                      "every day will derive as Regular and holiday-adjacent "
+                      "forecasts will be wrong until this is fixed")
+        return HolidayCalendar()
+    try:
         dates = pd.to_datetime(holidays["Date"])
         weekday = dates.dt.weekday < 5
         operated = pd.Series(False, index=holidays.index)
@@ -81,7 +90,10 @@ def load_holiday_dates(workbook, sheet_name: str = "Holiday List") -> HolidayCal
             closed=dates[weekday & ~operated].dt.date,
             operated=dates[weekday & operated].dt.date,
             holiday_types=dict(zip(dates.dt.date, types)))
-    except Exception:
+    except Exception as error:
+        import warnings
+        warnings.warn(f"Holiday List sheet is malformed ({error!r}) — "
+                      "every day will derive as Regular until this is fixed")
         return HolidayCalendar()
 
 

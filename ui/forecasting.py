@@ -27,8 +27,15 @@ def run_forecast(history: pd.DataFrame, plan: pd.DataFrame, holiday_dates: set,
     if shadow_preds:
         try:
             shadow.log_shadow_run(target, shadow_preds, SHADOW_LOG_CSV)
-        except Exception:
-            pass  # shadow logging must never break the official forecast
+        except Exception as error:
+            # never break the official forecast, but a dead shadow log means
+            # the month-end referee gets NO data — surface it immediately
+            import logging
+            import streamlit as st
+            logging.getLogger(__name__).exception("shadow log write failed")
+            st.warning(f"Shadow log not written ({error}) — challenger "
+                       "adjudication is losing data. Check shadow_log.csv "
+                       "permissions.", icon="⚠️")
     return target.sort_values(["Date", "predicted"], ascending=[True, False])
 
 

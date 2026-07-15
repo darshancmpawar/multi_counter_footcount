@@ -83,7 +83,7 @@ ui/                           Streamlit frontend package
 
 siemens_model_bundle/         the model itself
   features.py                 leakage-safe feature builder (frozen, audited)
-  predict.py                  CLI scorer (frozen)
+  predict.py                  CLI over the production scoring path (score_plan)
   evaluate.py                 metric harness (frozen)
   shadow.py                   k-shift feature builder + shadow/fallback loading
   auto_calendar.py            Day Type (holiday list) + Panchangam (ephem) derivation

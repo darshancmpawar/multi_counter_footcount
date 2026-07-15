@@ -239,10 +239,21 @@ def load_shadow():
     for q in (10, 75, 90):
         out[f"fb_q{q}"] = lgb.Booster(model_file=str(SHADOW_DIR / f"fb_q{q}.txt"))
     import joblib
+    import warnings
     for name in ("et_tuned", "knn"):
+        path = SHADOW_DIR / f"{name}.joblib"
+        if not path.exists():
+            out[name] = None
+            continue
         try:
-            out[name] = joblib.load(SHADOW_DIR / f"{name}.joblib")
-        except Exception:
+            out[name] = joblib.load(path)
+        except Exception as error:
+            # a present-but-unloadable entrant must be LOUD: this exact
+            # failure (missing pyarrow) silently dropped et/knn from the
+            # month-end referee for weeks
+            warnings.warn(f"shadow entrant '{name}' exists but failed to "
+                          f"load ({error!r}) — it will log NaN and be "
+                          f"missing from the month-end adjudication")
             out[name] = None
     return out
 
@@ -321,11 +332,17 @@ def trailing_debias_factor(counter_days, last_history_date, predict_fn):
     return float(np.clip(factor, *DEBIAS["clip"]))
 
 
-def detect_lag_regime(history, plan):
-    """'fresh' when the last served day is the working day right before the
-    first plan day (yesterday's actuals available), else 'stale'."""
+def detect_lag_regime(history, plan, holiday_dates=None):
+    """'fresh' when the last served day is the WORKING day right before the
+    first plan day (yesterday's actuals available), else 'stale'.
+
+    Holiday-aware: without the holiday calendar, the first working day after
+    a mid-week holiday counts a busday gap of 2 and is misrouted to the
+    lag-2 fallback even though the last working day's actuals are current."""
+    holidays = sorted(pd.Timestamp(d).date() for d in (holiday_dates or ()))
     gap = int(np.busday_count(history["Date"].max().date(),
-                              pd.to_datetime(plan["Date"]).min().date()))
+                              pd.to_datetime(plan["Date"]).min().date(),
+                              holidays=holidays))
     return "fresh" if gap <= 1 else "stale"
 
 
@@ -355,10 +372,16 @@ def score_plan(history, plan, holiday_dates, order_policy="standard"):
     # (e.g. Festival) — NaN-fill so plan[history.columns] can't KeyError
     for column in history.columns.difference(plan.columns):
         plan[column] = np.nan
-    regime = detect_lag_regime(history, plan)
+    regime = detect_lag_regime(history, plan, holiday_dates)
     lag_depth = 1 if regime == "fresh" else 2
 
     shadow_models = load_shadow()
+    if regime == "stale" and shadow_models is None:
+        raise RuntimeError(
+            "Yesterday's actuals are missing (stale regime) and the lag-2 "
+            "fallback set is not built — run retrain.py to build "
+            "artifacts_shadow/, or update the history workbook through the "
+            "last served day.")
     subcat_map = (shadow_models["meta"].get("subcat_map")
                   if shadow_models is not None else None)
     combined = pd.concat([history, plan[history.columns]], ignore_index=True)
