@@ -94,8 +94,9 @@ siemens_model_bundle/         the model itself
 
 model_research/               evidence behind every modelling decision
   FINDINGS.md                 research log: CV results, noise floor, sweeps
+  IMPROVEMENT_PLAN.md         August 2026 audit checklist (root cause + fixes)
   harness.py                  expanding-window CV harness
-  build_shadow_bundle.py      one-off builder for the current shadow set
+  add_festival_entrant.py     pre-registers the festival shadow entrant
   validate_auto_calendar.py   checks the calendar derivation against recorded labels
   shadow_eval.py              month-end shadow comparison
   retrain_reports/            one report per retraining run

@@ -40,6 +40,15 @@ FESTIVAL_FEATURES = ["fest_any", "fest_op_today", "adj_hol_important",
 # +/-15%). Gate keeps it dormant in stable regimes (CV-neutral); in the
 # June-July 2026 demand shift it recovered ~3.3pt counter WAPE.
 DEBIAS = {"window": 10, "min_days": 5, "gate": 0.80, "clip": (0.85, 1.15)}
+
+# Dates whose Headcount is IMPUTED as TLC / weekday-median(TLC/HC)
+# (workbook Considerations D1 + G4). Their plates-per-head is circular —
+# it equals the historical ratio by construction — so they must be masked
+# out of any propensity estimation, drift monitoring or per-head features.
+IMPUTED_HEADCOUNT_DATES = frozenset(pd.Timestamp(d).date() for d in (
+    "2026-04-13", "2026-04-20", "2026-04-24",           # D1
+    "2026-07-01", "2026-07-02", "2026-07-03", "2026-07-06",  # G4
+))
 CHALLENGER_PARAMS = {"nl": 10, "mcs": 8, "ff": 0.35, "rl": 0.5, "l1": 0.5,
                      "lr": 0.015, "bf": 0.8, "bfreq": 1}
 INCUMBENT_PARAMS = {"nl": 7, "mcs": 10, "ff": 0.6, "rl": 1, "lr": 0.03}
@@ -221,12 +230,23 @@ def design_sk(cd, med=None, cols=None):
     return X.fillna(med), med, X.columns
 
 
+_MODEL_CACHE = {}   # process-lifetime cache; restart (or clear) after a promote
+
+
+def clear_model_cache():
+    _MODEL_CACHE.clear()
+
+
 def load_shadow():
-    """Load all shadow/fallback artifacts (None if not built)."""
+    """Load all shadow/fallback artifacts (None if not built). Cached for
+    the process lifetime — score_plan runs on every forecast and must not
+    re-read a dozen boosters from disk each time."""
     import json
     import lightgbm as lgb
+    if "shadow" in _MODEL_CACHE:
+        return _MODEL_CACHE["shadow"]
     if not (SHADOW_DIR / "meta.json").exists():
-        return None
+        return None   # not cached: the bundle may be built later in-process
     meta = json.load(open(SHADOW_DIR / "meta.json"))
     out = {"meta": meta}
     for name in ["challenger4", "chal4_fb", "fb_point"]:
@@ -255,18 +275,22 @@ def load_shadow():
                           f"load ({error!r}) — it will log NaN and be "
                           f"missing from the month-end adjudication")
             out[name] = None
+    _MODEL_CACHE["shadow"] = out
     return out
 
 
 def load_incumbent():
-    """The frozen production boosters + conformal config."""
+    """The deployed production boosters + conformal config (cached)."""
     import pickle
     import lightgbm as lgb
+    if "incumbent" in _MODEL_CACHE:
+        return _MODEL_CACHE["incumbent"]
     artifacts = BUNDLE_DIR / "artifacts"
     with open(artifacts / "final_config.pkl", "rb") as f:
         config = pickle.load(f)
     boosters = {name: lgb.Booster(model_file=str(artifacts / f"model_{name}.txt"))
                 for name in ("point", "q10", "q75", "q90")}
+    _MODEL_CACHE["incumbent"] = (boosters, config)
     return boosters, config
 
 

@@ -167,14 +167,3 @@ def build_all(df):
     cd = add_active_and_competitor(cd)
     cd = add_history(cd)
     return cd
-
-
-def design_matrix(cd, feature_medians=None):
-    """One-hot categoricals; median-impute NaNs (medians fit on TRAIN only)."""
-    X = cd[NUM_FEATURES].copy()
-    for c in CAT_FEATURES:
-        X = pd.concat([X, pd.get_dummies(cd[c], prefix=c[:2]).astype(int)], axis=1)
-    if feature_medians is None:
-        feature_medians = X.median(numeric_only=True)
-    X = X.fillna(feature_medians)
-    return X, feature_medians

@@ -59,6 +59,11 @@ def run_leakage_test(history: pd.DataFrame | None = None, verbose: bool = True) 
     return passed
 
 
+def test_leakage():
+    """Pytest entry point — the gate itself (slow: full feature rebuilds)."""
+    assert run_leakage_test(verbose=False)
+
+
 if __name__ == "__main__":
     print(f"leakage gate over {len(ALL_FEATURES)} features, 2 cuts × 2 lag regimes")
     ok = run_leakage_test()

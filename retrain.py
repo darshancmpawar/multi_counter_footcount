@@ -40,6 +40,7 @@ BUNDLE_DIR = REPO_ROOT / "siemens_model_bundle"
 sys.path.insert(0, str(BUNDLE_DIR))
 
 import auto_calendar  # noqa: E402
+from evaluate import wape  # noqa: E402
 from shadow import (CHALLENGER4_FEATURES, CHALLENGER_PARAMS,  # noqa: E402
                     FESTIVAL_FEATURES, INCUMBENT_PARAMS, build_cd_k,
                     design_lgb, design_sk, freeze_headword_map)
@@ -51,11 +52,6 @@ QUANTILES = (0.10, 0.75, 0.90)
 SEEDS = (1, 42, 99)
 INTERVAL_COVERAGE = 0.80    # nominal coverage of the P10-P90 band
 ORDER_SERVICE_LEVEL = 0.75  # service level of the suggested-order quantile
-
-
-def wape(actual, predicted) -> float:
-    actual, predicted = np.asarray(actual, float), np.asarray(predicted, float)
-    return float(100 * np.abs(predicted - actual).sum() / actual.sum())
 
 
 def lgb_params(config: dict, objective: str = "poisson", seed: int = 42,

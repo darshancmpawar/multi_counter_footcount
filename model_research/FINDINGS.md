@@ -393,3 +393,39 @@ its matched baseline WAPE for exactly this reason.
 - **Still the biggest levers** (unchanged from the July FINDINGS): more history,
   and a leakage-safe day-ahead attendance/headcount signal — the −11% per-head
   drop is exactly the variance an attendance feature would capture.
+
+---
+
+# Audit round — August 2026 (root cause + production hardening)
+
+A full adversarial audit (code / data / features / decisions) answered the
+open question from the forward test: **why did demand shift on 15 Jun?**
+
+**Root cause (from the never-read workbook sheets + kiosk orderlog):** a
+menu/caterer overhaul landed exactly at the shift date. Considerations G6
+documents 54 brand-new dishes in the 15 Jun – 9 Jul window (new-item share of
+the daily menu 9.8% → 15.2%); the orderlog's vendor column shows the two
+dominant caterers exiting by May 2026 with replacements ramping Apr–May, plus
+lunch price creep. The per-head drop is largest on the counter that received
+the most new dishes (North Veg −17%). Also material: **the true propensity
+drop is −13.8%, not −9%** — Apr 13/20/24 and Jul 1/2/3/6 have circularly
+imputed headcount (Considerations D1/G4) that makes those days look normal by
+construction (now masked via `shadow.IMPUTED_HEADCOUNT_DATES`). This is why
+festival/panchangam features and one retrain couldn't fix the error: the miss
+is a behavioral propensity shift, not a calendar effect, and 3.5 weeks of new
+level dilutes into 11 months of history.
+
+Production defects found, verified and fixed (details in git log +
+`model_research/IMPROVEMENT_PLAN.md`): requirements.txt missing
+sklearn/joblib/pyarrow (the cause of the silently-dead ET/KNN entrants);
+predict.py was a divergent second scoring path quoting ~9% higher orders than
+the app; day-after-holiday plans were misrouted to the lag-2 fallback; four
+classes of silent exception swallowing; five copies of wape(); dead
+functions/artifacts/one-off scripts removed; boosters now cached per process;
+13 fast unit tests added around the decision logic.
+
+Open with the client: obtain orderlog_2026_06/07.csv (kiosk export ends
+25 May — it misses the shift window entirely), Raw_Data.xlsx (Summary Report
+incident log, covers to 2 Jul), and sign-off on the 47 unapproved New Items
+Review rows. Next: the error-reduction experiment matrix in
+IMPROVEMENT_PLAN.md item 4 — menu-novelty features (root-cause aligned) first.

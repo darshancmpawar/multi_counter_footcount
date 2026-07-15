@@ -39,13 +39,9 @@ sys.path.insert(0, str(BUNDLE))
 sys.path.insert(0, str(REPO))
 
 import auto_calendar  # noqa: E402
+from evaluate import wape  # noqa: E402
 from shadow import FESTIVAL_FEATURES, build_cd_k, freeze_headword_map  # noqa: E402
 from retrain import ModelTrainer, INCUMBENT_PARAMS, SEEDS  # noqa: E402
-
-
-def wape(y, p):
-    y, p = np.asarray(y, float), np.asarray(p, float)
-    return 100 * np.abs(p - y).sum() / y.sum()
 
 
 def main():

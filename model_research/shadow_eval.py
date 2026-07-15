@@ -18,10 +18,7 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "siemens_model_bundle"))
 
-
-def wape(actual, predicted):
-    actual, predicted = np.asarray(actual, float), np.asarray(predicted, float)
-    return 100 * np.abs(predicted - actual).sum() / actual.sum()
+from evaluate import wape  # noqa: E402
 
 
 def main() -> None:
